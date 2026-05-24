@@ -1,5 +1,6 @@
 
 import { UsbConnection, CMD, MODE } from '../services/UsbConnection.js';
+import { SerialConnection } from '../services/SerialConnection.js';
 import { WebSocketClient } from '../services/WebSocketClient.js';
 import { RBYTrading } from '../services/RBYTrading.js';
 import { GSCTrading } from '../services/GSCTrading.js';
@@ -9,7 +10,7 @@ import { RSESPTrading } from '../services/RSESPTrading.js';
 
 export class AppUI {
     constructor() {
-        this.usb = new UsbConnection();
+        this.usb = new UsbConnection();  // replaced on connect based on chosen transport
         this.ws = new WebSocketClient();
         this.protocol = null;
         this.settings = new SettingsManager();
@@ -17,6 +18,7 @@ export class AppUI {
         this.elements = {
             usbStatus: document.getElementById('usb-status'),
             btnConnectUsb: document.getElementById('btn-connect-usb'),
+            btnConnectSerial: document.getElementById('btn-connect-serial'),
             btnStartTrade: document.getElementById('btn-start-trade'),
             btnSendMultiboot: document.getElementById('btn-send-multiboot'),
             btnSettings: document.getElementById('btn-settings'),
@@ -60,7 +62,12 @@ export class AppUI {
     }
 
     attachListeners() {
-        this.elements.btnConnectUsb.addEventListener('click', () => this.connectUsb());
+        this.elements.btnConnectUsb.addEventListener('click', () => this.connect('usb'));
+        if (this.elements.btnConnectSerial) {
+            this.elements.btnConnectSerial.addEventListener('click', () => this.connect('serial'));
+            if (!('serial' in navigator)) this.elements.btnConnectSerial.disabled = true;
+        }
+        if (!('usb' in navigator)) this.elements.btnConnectUsb.disabled = true;
         this.elements.btnStartTrade.addEventListener('click', () => this.startTrade());
         this.elements.btnSendMultiboot.addEventListener('click', () => this.sendMultiboot());
         this.elements.btnTimeCapsule.addEventListener('click', () => this.toggleTimeCapsule());
@@ -309,18 +316,28 @@ export class AppUI {
         }
     }
 
-    async connectUsb() {
+    async connect(kind) {
         try {
-            this.log('Requesting USB device...');
+            if (this.usb && this.usb.isConnected) {
+                try { await this.usb.disconnect(); } catch (_) {}
+            }
+            this.usb = kind === 'serial' ? new SerialConnection() : new UsbConnection();
+
+            this.log(`Requesting ${kind === 'serial' ? 'serial port' : 'USB device'}...`);
             await this.usb.connect();
-            this.elements.usbStatus.textContent = 'Connected';
+            this.elements.usbStatus.textContent = `Connected (${kind})`;
             this.elements.usbStatus.className = 'status connected';
+            // Disable both connect buttons once one transport is open
             this.elements.btnConnectUsb.disabled = true;
+            if (this.elements.btnConnectSerial) this.elements.btnConnectSerial.disabled = true;
             this.checkReady();
         } catch (error) {
-            this.log(`USB connection failed: ${error}`);
+            this.log(`${kind} connection failed: ${error}`);
         }
     }
+
+    // Back-compat shim — old callers may still invoke connectUsb()
+    async connectUsb() { return this.connect('usb'); }
 
     checkReady() {
         if (this.usb.isConnected) this.elements.btnStartTrade.disabled = false;
