@@ -18,7 +18,6 @@ export class AppUI {
         this.elements = {
             usbStatus: document.getElementById('usb-status'),
             btnConnectUsb: document.getElementById('btn-connect-usb'),
-            btnConnectSerial: document.getElementById('btn-connect-serial'),
             btnStartTrade: document.getElementById('btn-start-trade'),
             btnSendMultiboot: document.getElementById('btn-send-multiboot'),
             btnSettings: document.getElementById('btn-settings'),
@@ -51,6 +50,12 @@ export class AppUI {
             settingConvertEggs: document.getElementById('setting-convert-eggs')
         };
 
+        // Auto-select transport: prefer WebUSB, fall back to WebSerial (Firefox 151+,
+        // or Chromium with WebUSB disabled). When WebUSB is available, never use serial.
+        const hasUsb = ('usb' in navigator);
+        const hasSerial = ('serial' in navigator);
+        this.transport = hasUsb ? 'usb' : (hasSerial ? 'serial' : null);
+
         this.selectedGen = null;
         this.selectedTradeType = 'link';
         this.isTimeCapsule = false;
@@ -62,12 +67,14 @@ export class AppUI {
     }
 
     attachListeners() {
-        this.elements.btnConnectUsb.addEventListener('click', () => this.connect('usb'));
-        if (this.elements.btnConnectSerial) {
-            this.elements.btnConnectSerial.addEventListener('click', () => this.connect('serial'));
-            if (!('serial' in navigator)) this.elements.btnConnectSerial.disabled = true;
+        // Single auto-selecting connect button. Label and target transport depend on
+        // what the browser supports; serial is only used when WebUSB is unavailable.
+        if (this.transport) {
+            this.elements.btnConnectUsb.textContent = this.transport === 'serial' ? 'Connect Serial' : 'Connect USB';
+            this.elements.btnConnectUsb.addEventListener('click', () => this.connect(this.transport));
+        } else {
+            this.elements.btnConnectUsb.disabled = true;
         }
-        if (!('usb' in navigator)) this.elements.btnConnectUsb.disabled = true;
         this.elements.btnStartTrade.addEventListener('click', () => this.startTrade());
         this.elements.btnSendMultiboot.addEventListener('click', () => this.sendMultiboot());
         this.elements.btnTimeCapsule.addEventListener('click', () => this.toggleTimeCapsule());
@@ -327,9 +334,8 @@ export class AppUI {
             await this.usb.connect();
             this.elements.usbStatus.textContent = `Connected (${kind})`;
             this.elements.usbStatus.className = 'status connected';
-            // Disable both connect buttons once one transport is open
+            // Disable the connect button once a transport is open
             this.elements.btnConnectUsb.disabled = true;
-            if (this.elements.btnConnectSerial) this.elements.btnConnectSerial.disabled = true;
             this.checkReady();
         } catch (error) {
             this.log(`${kind} connection failed: ${error}`);
