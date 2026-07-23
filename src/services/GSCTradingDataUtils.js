@@ -8,8 +8,8 @@
  * - Trading between parties
  * - Data export for hardware
  */
-import { GSCUtils } from './GSCUtils.js';
-import { GSCPokemonInfo } from './GSCPokemonInfo.js';
+import { GSCUtils } from './GSCUtils.js?v=88';
+import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=88';
 
 /**
  * Simple text holder class (matches ref. impl's GSCTradingText)

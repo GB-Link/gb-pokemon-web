@@ -1,12 +1,12 @@
 
-import { UsbConnection, CMD, MODE } from '../services/UsbConnection.js';
-import { SerialConnection } from '../services/SerialConnection.js';
-import { WebSocketClient } from '../services/WebSocketClient.js';
-import { RBYTrading } from '../services/RBYTrading.js';
-import { GSCTrading } from '../services/GSCTrading.js';
-import { SettingsManager } from '../services/SettingsManager.js';
-import { multiboot } from '../services/Multiboot.js';
-import { RSESPTrading } from '../services/RSESPTrading.js';
+import { UsbConnection, CMD, MODE } from '../services/UsbConnection.js?v=88';
+import { SerialConnection } from '../services/SerialConnection.js?v=88';
+import { WebSocketClient } from '../services/WebSocketClient.js?v=88';
+import { RBYTrading } from '../services/RBYTrading.js?v=88';
+import { GSCTrading } from '../services/GSCTrading.js?v=88';
+import { SettingsManager } from '../services/SettingsManager.js?v=88';
+import { multiboot } from '../services/Multiboot.js?v=88';
+import { RSESPTrading } from '../services/RSESPTrading.js?v=88';
 
 export class AppUI {
     constructor() {
@@ -34,6 +34,14 @@ export class AppUI {
             btnNegotiateYes: document.getElementById('btn-negotiate-yes'),
             btnNegotiateNo: document.getElementById('btn-negotiate-no'),
             logContainer: document.getElementById('log-container'),
+            btnCopyLog: document.getElementById('btn-copy-log'),
+            statusIndicator: document.getElementById('status-indicator'),
+            statusText: document.getElementById('status-text'),
+            statusDetail: document.getElementById('status-detail'),
+            progressWrap: document.getElementById('progress-wrap'),
+            progressLabel: document.getElementById('progress-label'),
+            progressCount: document.getElementById('progress-count'),
+            progressFill: document.getElementById('progress-fill'),
             settingsModal: document.getElementById('settings-modal'),
             btnCloseSettings: document.getElementById('btn-close-settings'),
             btnResetDefaults: document.getElementById('btn-reset-defaults'),
@@ -76,6 +84,7 @@ export class AppUI {
             this.elements.btnConnectUsb.disabled = true;
         }
         this.elements.btnStartTrade.addEventListener('click', () => this.startTrade());
+        this.elements.btnCopyLog.addEventListener('click', () => this.copyLog());
         this.elements.btnSendMultiboot.addEventListener('click', () => this.sendMultiboot());
         this.elements.btnTimeCapsule.addEventListener('click', () => this.toggleTimeCapsule());
         this.elements.btnGenerateRoom.addEventListener('click', () => this.generateRoomCode());
@@ -295,6 +304,54 @@ export class AppUI {
         }
         this.elements.logContainer.scrollTop = this.elements.logContainer.scrollHeight;
         if (this.settings.get('verbose')) console.log(msg);
+
+        // Mirror errors into the status row so they surface with the log hidden
+        if (msg.startsWith('[ERROR]')) {
+            this.setStatus(msg.replace('[ERROR]', '').trim(), 'error');
+        }
+    }
+
+    async copyLog() {
+        const text = Array.from(this.elements.logContainer.children)
+            .map(e => e.textContent).join('\n');
+        try {
+            await navigator.clipboard.writeText(text);
+            this.elements.btnCopyLog.textContent = 'Copied!';
+        } catch (_) {
+            this.elements.btnCopyLog.textContent = 'Copy failed';
+        }
+        setTimeout(() => { this.elements.btnCopyLog.textContent = 'Copy'; }, 1500);
+    }
+
+    // === Status / progress display ===
+
+    setStatus(text, type = '', detail = '') {
+        this.elements.statusText.textContent = text;
+        if (type) {
+            this.elements.statusIndicator.dataset.type = type;
+            this.elements.statusText.dataset.type = type === 'active' ? '' : type;
+        } else {
+            delete this.elements.statusIndicator.dataset.type;
+            delete this.elements.statusText.dataset.type;
+        }
+        this.elements.statusDetail.textContent = detail;
+    }
+
+    setProgress(label, done, total) {
+        // Called per byte from hot exchange loops; throttle DOM writes
+        const now = Date.now();
+        if (done < total && this._lastProgressRender && now - this._lastProgressRender < 80) return;
+        this._lastProgressRender = now;
+
+        this.elements.progressWrap.classList.remove('hidden');
+        this.elements.progressLabel.textContent = label;
+        this.elements.progressCount.textContent = `${done} / ${total} bytes`;
+        this.elements.progressFill.style.width = `${Math.min(100, (done / total) * 100)}%`;
+    }
+
+    hideProgress() {
+        this.elements.progressWrap.classList.add('hidden');
+        this.elements.progressFill.style.width = '0%';
     }
 
     // === Connection ===
@@ -340,9 +397,11 @@ export class AppUI {
             this.elements.usbStatus.className = 'status connected';
             // Disable the connect button once a transport is open
             this.elements.btnConnectUsb.disabled = true;
+            this.setStatus('Adapter connected — pick a generation and start the trade', 'success');
             this.checkReady();
         } catch (error) {
             this.log(`${kind} connection failed: ${error}`);
+            this.setStatus('Adapter connection failed', 'error');
         }
     }
 
@@ -365,8 +424,13 @@ export class AppUI {
         }
 
         this.elements.btnStartTrade.disabled = true;
+        this.setStatus('Connecting to server…', 'active');
         const connected = await this.connectServer();
-        if (!connected) { this.elements.btnStartTrade.disabled = false; return; }
+        if (!connected) {
+            this.elements.btnStartTrade.disabled = false;
+            this.setStatus('Server connection failed', 'error');
+            return;
+        }
 
         this.isTradeActive = true;
         this.elements.btnStartTrade.textContent = 'Stop Trade';
@@ -452,9 +516,17 @@ export class AppUI {
             });
         }
 
+        // Status + progress hooks for the status panel (log is hidden by default)
+        const protocol = this.protocol;
+        protocol.onStatus = (text, type = 'active', detail = '') => this.setStatus(text, type, detail);
+        protocol.onProgress = (sectionIndex, done, total) => {
+            const names = protocol.SECTION_NAMES || [];
+            this.setProgress(names[sectionIndex] || `Section ${sectionIndex}`, done, total);
+        };
+        this.setStatus('Initiate the trade on your Game Boy', 'active');
+
         // Surface a mid-trade server disconnect instead of letting the trade
         // loops poll a dead connection forever.
-        const protocol = this.protocol;
         this.ws.onDisconnect = () => {
             if (!protocol.stopTrade) {
                 this.log('Server connection lost - stopping trade.');
@@ -488,6 +560,7 @@ export class AppUI {
             await Promise.race([this.tradePromise, new Promise(r => setTimeout(r, 3000))]);
         }
         this.resetTradeButton();
+        this.setStatus('Trade stopped', 'warning');
         this.log('Trade stopped. You can start a new trade.');
     }
 
@@ -495,5 +568,6 @@ export class AppUI {
         this.isTradeActive = false;
         this.elements.btnStartTrade.textContent = 'Start Trade';
         this.elements.btnStartTrade.disabled = false;
+        this.hideProgress();
     }
 }

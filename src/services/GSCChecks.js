@@ -8,7 +8,7 @@
  * - Stats that don't match calculated values
  * - Malicious data manipulation
  */
-import { GSCUtils } from './GSCUtils.js';
+import { GSCUtils } from './GSCUtils.js?v=88';
 
 export class GSCChecks {
     // Default replacement values

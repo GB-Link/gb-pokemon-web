@@ -659,3 +659,120 @@ body.light-mode .btn-secondary {
 .app-footer a:hover {
     text-decoration: underline;
 }
+/* ============ Trade Status Card ============ */
+
+.trade-status-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.trade-status-row p {
+    margin: 0;
+    font-weight: 600;
+}
+
+.trade-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--input-border);
+    transition: background 0.2s;
+}
+
+.trade-indicator[data-type='active'] {
+    background: var(--primary-color);
+    animation: status-pulse 1.2s ease-in-out infinite;
+}
+
+.trade-indicator[data-type='success'] { background: var(--success-color); }
+.trade-indicator[data-type='error']   { background: var(--error-color); }
+.trade-indicator[data-type='warning'] { background: #ffb74d; }
+
+@keyframes status-pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.3; }
+}
+
+#status-text[data-type='success'] { color: var(--success-color); }
+#status-text[data-type='error']   { color: var(--error-color); }
+#status-text[data-type='warning'] { color: #ffb74d; }
+
+#status-detail {
+    margin: 4px 0 0 16px;
+    font-size: 12px;
+    opacity: 0.75;
+}
+
+#status-detail:empty { display: none; }
+
+/* Progress bar */
+
+.progress-wrap { margin-top: 14px; }
+
+.progress-wrap.hidden { display: none; }
+
+.progress-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 5px;
+}
+
+#progress-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--primary-color);
+}
+
+#progress-count {
+    font-family: monospace;
+    font-size: 12px;
+    opacity: 0.8;
+}
+
+.progress-track {
+    height: 8px;
+    background: var(--input-bg);
+    border: 1px solid var(--input-border);
+    border-radius: 99px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    width: 0%;
+    background: var(--primary-color);
+    border-radius: 99px;
+    transition: width 0.15s ease-out;
+}
+
+/* ============ Collapsible Log Card ============ */
+
+details.log-card summary {
+    cursor: pointer;
+    font-size: 1.2rem;
+    font-weight: bold;
+    color: var(--heading-color);
+    user-select: none;
+}
+
+details.log-card[open] summary {
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 10px;
+    margin-bottom: 10px;
+}
+
+.log-header-row {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 8px;
+}
+
+.log-copy-btn {
+    padding: 4px 10px;
+    font-size: 12px;
+}

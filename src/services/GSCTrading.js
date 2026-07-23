@@ -1,8 +1,8 @@
 
-import { TradingProtocol } from './TradingProtocol.js';
-import { GSCUtils } from './GSCUtils.js';
-import { GSCChecks } from './GSCChecks.js';
-import { GSCJPMailConverter } from './GSCJPMailConverter.js';
+import { TradingProtocol } from './TradingProtocol.js?v=88';
+import { GSCUtils } from './GSCUtils.js?v=88';
+import { GSCChecks } from './GSCChecks.js?v=88';
+import { GSCJPMailConverter } from './GSCJPMailConverter.js?v=88';
 
 export class GSCTrading extends TradingProtocol {
     constructor(usb, ws, logger, tradeType = 'pool', isBuffered = false, doSanityChecks = true, options = {}) {
@@ -54,6 +54,7 @@ export class GSCTrading extends TradingProtocol {
         ];
 
         this.SPECIAL_SECTIONS_LEN = [0xA, 0x1BC, 0xC5, 0x181]; // Random, Pokemon, Patches, Mail (Matches ref impl)
+        this.SECTION_NAMES = ['Random data', 'Party data', 'Patch data', 'Mail data']; // UI progress labels
         this.SPECIAL_SECTIONS_PREAMBLE_LEN = [7, 6, 3, 5]; // Random, Pokemon, Patches, Mail (Matches ref impl)
 
         // drop_bytes_checks: [[start_positions], [bad_bytes]]
@@ -370,6 +371,7 @@ export class GSCTrading extends TradingProtocol {
 
         let tradeData;
         let isGhostTrade = false; // First pass of buffered trade uses filler data
+        let firstBufferedPass = false; // First buffered pass must always send FLL2
 
         if (this.isLinkTrade) {
             this.log("Link Trade: Skipping POL2 - will exchange data with other player");
@@ -382,6 +384,7 @@ export class GSCTrading extends TradingProtocol {
                 if (!this.bufferedOtherData) {
                     // PASS 1: Ghost trade - we don't have peer's data yet
                     isGhostTrade = true;
+                    firstBufferedPass = true;
                     this.log("Buffered Mode: Pass 1 (Ghost Trade) - Collecting our party data...");
 
                     // Try to get peer's data first (they might have sent it already)
@@ -391,7 +394,9 @@ export class GSCTrading extends TradingProtocol {
                     if (earlyPeerData && earlyPeerData.length > 0) {
                         // Peer already sent their data - use it for better exchange
                         this.log("Peer FLL2 received early, using their data...");
+                        delete this.ws.recvDict["FLL2"];
                         this.bufferedOtherData = this.unpackFLL2(earlyPeerData);
+                        this.cachedPeerPartyDecoded = false; // FLL data is raw wire form
 
                         // Fix incompatible nicknames for cross-version JP/INT trades
                         const fixedCount = GSCUtils.fixIncompatibleNicknames(this.bufferedOtherData[1]);
@@ -549,8 +554,11 @@ export class GSCTrading extends TradingProtocol {
             if (this.verbose) this.log("[DEBUG] Cached peer sections for subsequent trades");
         }
 
-        // 5. BUFFERED MODE: After collecting our party, exchange FLL2
-        if (this.isBuffered && this.isLinkTrade && isGhostTrade) {
+        // 5. BUFFERED MODE: After collecting our party, exchange FLL2.
+        // Sending is UNCONDITIONAL on the first pass (Python send_big_trading_data):
+        // when we consumed the peer's early FLL2 they are still blocked waiting
+        // for OURS - skipping the send here starved them into a timeout.
+        if (this.isBuffered && this.isLinkTrade && firstBufferedPass) {
             this.log("Buffered Mode: Sending our party data via FLL2...");
 
             // Pack our collected data into FLL2 format
@@ -561,21 +569,25 @@ export class GSCTrading extends TradingProtocol {
             };
             await this.sendBigTradingData(randomData, ourTradeData);
 
-            // Receive peer's data
-            this.log("Waiting for peer's FLL2...");
-            const peerSections = await this.getBigTradingData();
-            if (peerSections) {
-                this.bufferedOtherData = peerSections;
-                this.cachedPeerPartyDecoded = false; // FLL data is raw wire form
-                this.log("Buffered Data Exchange Complete. Canceling ghost trade...");
+            if (isGhostTrade) {
+                // Receive peer's data (they may not have sat down yet - wait
+                // at human timescale, like Python's force_receive)
+                this.log("Waiting for peer's FLL2...");
+                this.onStatus?.('Waiting for the other player…');
+                const peerSections = await this.getBigTradingData();
+                if (peerSections) {
+                    this.bufferedOtherData = peerSections;
+                    this.cachedPeerPartyDecoded = false; // FLL data is raw wire form
+                    this.log("Buffered Data Exchange Complete. Canceling ghost trade...");
 
-                // Signal to cancel this trade and return to table
-                // The next iteration will use peer's data for real trade
-                this.cancelCurrentTrade = true;
-            } else {
-                this.log("Error: Failed to receive FLL2 data.");
-                this.stopTrade = true;
-                return;
+                    // Signal to cancel this trade and return to table
+                    // The next iteration will use peer's data for real trade
+                    this.cancelCurrentTrade = true;
+                } else {
+                    this.log("[ERROR] The other player never sent their trade data.");
+                    this.stopTrade = true;
+                    return;
+                }
             }
         }
 
@@ -1036,6 +1048,7 @@ export class GSCTrading extends TradingProtocol {
 
         while (!this.stopTrade) {
             // 1. Wait for a valid choice from GB
+            this.onStatus?.('Pick a Pokémon on your Game Boy');
 
             // This waits for 10 CONSECUTIVE reads of the same value for stability
             if (this.verbose) this.log("[DEBUG] Starting selection wait (using waitForChoice)");
@@ -1107,6 +1120,7 @@ export class GSCTrading extends TradingProtocol {
             // 5. Wait for GB's accept/decline decision
             // Use waitForAcceptDecline which matches wait_for_accept_decline
             // This waits for a STABLE value (10 consecutive reads) to filter out glitches
+            this.onStatus?.('Confirm the trade on your Game Boy');
             const gbAccept = await this.waitForAcceptDecline(next);
 
             if (this.stopTrade) break;
@@ -1150,6 +1164,7 @@ export class GSCTrading extends TradingProtocol {
             if (gbAccept === ACCEPT_TRADE && serverAccept === ACCEPT_TRADE) {
                 // 8. Trade accepted! NOW wait for GB to send success byte (after animation)
                 this.log("Trade accepted by both parties!");
+                this.onStatus?.('Trading…');
                 this.log("Waiting for trade success confirmation from GB...");
 
                 // Define Success Bytes
@@ -1212,6 +1227,7 @@ export class GSCTrading extends TradingProtocol {
                     if (this.verbose) this.log("[DEBUG] Cleared cached peer data for fresh POL2 fetch (pool trade reset)");
 
                     this.log("Trade round completed successfully!");
+                    this.onStatus?.('Trade complete!', 'success');
                     this.log("Preparing for next trade - re-synchronizing data...");
 
                     // Exit trade menu loop to restart sequence (but skip sitToTable in startTrade)
@@ -1219,6 +1235,7 @@ export class GSCTrading extends TradingProtocol {
                 }
             } else {
                 this.log("Trade declined. Returning to selection...");
+                this.onStatus?.('Trade declined — pick another Pokémon');
                 // Loop back to selection
             }
         }
@@ -1490,11 +1507,12 @@ export class GSCTrading extends TradingProtocol {
         // BUFFERED MODE: If this is a ghost trade (Pass 1), wait for user to cancel
         if (this.cancelCurrentTrade) {
             this.log("=== BUFFERED MODE: Ghost Trade Complete ===");
-            this.log("You should now CANCEL the current trade on your Game Boy (press B).");
+            this.log("You should now select CANCEL TRADE on your Game Boy.");
             this.log("Waiting for you to exit the trade menu...");
+            this.onStatus?.('Select CANCEL TRADE on your Game Boy');
             this.cancelCurrentTrade = false;
 
-            // Wait for the user to cancel on the GB (they select exit or press B)
+            // Wait for the user to cancel on the GB (they select CANCEL TRADE)
             // The GB will send STOP_TRADE (0x7F) when they cancel
             const ourChoice = await this.waitForChoice(this.NO_INPUT, POSSIBLE_INDEXES, 10);
 
@@ -1512,6 +1530,7 @@ export class GSCTrading extends TradingProtocol {
 
         while (!this.stopTrade) {
             // 1. Wait for our GB's selection
+            this.onStatus?.('Pick a Pokémon on your Game Boy');
             const ourChoice = await this.waitForChoice(this.NO_INPUT, POSSIBLE_INDEXES, 10);
 
             if (this.stopTrade) break;
@@ -1558,6 +1577,7 @@ export class GSCTrading extends TradingProtocol {
             this.log(`Sent CHC2: ${chc2Payload.length} bytes, counter=${chc2Payload[0]}, next counter will be ${this.ownCounterId}`);
 
             // 4. Get peer's choice via GET CHC2
+            this.onStatus?.("Waiting for the other player's choice…");
             const peerData = await this.getChosenMon();
             if (!peerData) {
                 this.log("Failed to get peer's selection");
@@ -1581,6 +1601,7 @@ export class GSCTrading extends TradingProtocol {
             if (next === this.NO_DATA) next = await this.waitForNoInput(next);
 
             // 7. Wait for our GB's accept/decline
+            this.onStatus?.('Confirm the trade on your Game Boy');
             const ourAccept = await this.waitForAcceptDecline(next);
             this.log(`Our GB decision: ${ourAccept === ACCEPT_TRADE ? 'ACCEPT' : 'DECLINE'}`);
 
@@ -1591,6 +1612,7 @@ export class GSCTrading extends TradingProtocol {
             this.log(`Sent ACP2 with counter=${acp2Payload[0]}`);
 
             // 9. Get peer's accept/decline
+            this.onStatus?.('Waiting for the other player to confirm…');
             const peerAccept = await this.getAccepted();
             if (peerAccept === null) {
                 this.log("Failed to get peer's accept decision");
@@ -1606,6 +1628,7 @@ export class GSCTrading extends TradingProtocol {
             // 11. Handle trade outcome
             if (ourAccept === ACCEPT_TRADE && peerAccept === ACCEPT_TRADE) {
                 this.log("Trade accepted by both parties!");
+                this.onStatus?.('Trading…');
 
                 // === Exchange need_data (NED2/ASK2) after trade ===
                 // This is CRITICAL for synchronization!
@@ -1688,6 +1711,7 @@ export class GSCTrading extends TradingProtocol {
                 if (next === this.NO_DATA) next = await this.waitForNoInput(next);
 
                 this.log("Trade completed successfully!");
+                this.onStatus?.('Trade complete!', 'success');
 
                 // Clear buffers for next trade
                 let stableCount = 0;
@@ -1728,6 +1752,7 @@ export class GSCTrading extends TradingProtocol {
                 break;
             } else {
                 this.log("Trade declined.");
+                this.onStatus?.('Trade declined — pick another Pokémon');
             }
         }
 
@@ -2779,6 +2804,7 @@ export class GSCTrading extends TradingProtocol {
         this.sendTradeData(sendBuf);
 
         this.log(`Sync Section ${index}: Waiting for peer synchronization...`);
+        this.onStatus?.('Waiting for the other player…');
 
         let found = false;
         let wrongIndexMarkers = 0;
@@ -2894,7 +2920,7 @@ export class GSCTrading extends TradingProtocol {
             // exactly like Python; the section tail absorbs the slack.
             const MAX_TOLERANCE_BYTES = 3;
             const SAFETY_AMOUNT = MAX_TOLERANCE_BYTES - 2;
-            const PACING_MS = 15; // Python sleep_func(0.02); USB latency adds the rest
+            const WAIT_POLL_MS = 4; // poll cadence while waiting on network data
             const MAX_MS_BETWEEN_TRANSFERS = 800; // Python max_seconds_between_transfers
             let posSend = 1;   // next position for our GB's bytes (0 = firstByte)
             let posRecv = 0;   // contiguous peer bytes buffered into otherBuf
@@ -2954,12 +2980,20 @@ export class GSCTrading extends TradingProtocol {
                     posSend++;
                     this.sendTradeData(this.createDataPacket(sendBufData, index));
                     lastTransfer = Date.now();
+                    this.onProgress?.(index, posSend, length);
                     if (this.verbose && posSend % 50 === 0) {
                         this.log(`Sync Section ${index}: sent ${posSend}/${length}, fed ${iFeed}, received ${posRecv}`);
                     }
                 }
 
-                await this.sleep(PACING_MS);
+                // Burst scheduling: a data-carrying transfer needs no pacing -
+                // the USB round trip itself is the pacing, and buffered mode
+                // proves the game streams section data at that rate. Sleep
+                // only while waiting on network data or after a
+                // filler/keep-alive exchange.
+                if (!schedule || byteToConsole === this.NO_INPUT) {
+                    await this.sleep(WAIT_POLL_MS);
+                }
             }
 
             // Tail: Python feeds NO_DATA for the remaining offset slack
@@ -2971,7 +3005,7 @@ export class GSCTrading extends TradingProtocol {
                 posSend++;
                 this.sendTradeData(this.createDataPacket(sendBufData, index));
                 iFeed++;
-                await this.sleep(PACING_MS);
+                await this.sleep(WAIT_POLL_MS);
             }
 
             // Python pads both buffers to the section length
@@ -3029,6 +3063,7 @@ export class GSCTrading extends TradingProtocol {
 
                     // Exchange with GB: send peer's byte, receive our next byte
                     const nextByte = await this.exchangeByte(cleanByte);
+                    this.onProgress?.(index, i + 1, length);
 
                     const nextI = i + 1;
 
@@ -3179,7 +3214,8 @@ export class GSCTrading extends TradingProtocol {
     async getBigTradingData() {
         this.log("Waiting for FLL2 (Full Trade Data)...");
         this.ws.sendGetData("FLL2");
-        const data = await this.waitForMessage("FLL2");
+        // The other player may not have sat down yet - wait at human timescale
+        const data = await this.waitForMessage("FLL2", 300000);
 
         if (!data) return null;
 
@@ -3341,6 +3377,7 @@ export class GSCTrading extends TradingProtocol {
                 if (sendByte === this.NO_INPUT) sendByte = 0xFF;
                 const recvByte = await this.exchangeByte(sendByte);
                 receivedData[i + 1] = recvByte;
+                this.onProgress?.(index, i + 2, length);
 
                 if (i < 10) {
                     this.log(`Buf Byte ${i}: Send=${sendByte.toString(16)}, Recv=${recvByte.toString(16)}`);
@@ -3386,6 +3423,7 @@ export class GSCTrading extends TradingProtocol {
 
             const recvByte = await this.exchangeByte(val);
             receivedData[i + 1] = recvByte;
+            this.onProgress?.(index, i + 2, length);
         }
 
 

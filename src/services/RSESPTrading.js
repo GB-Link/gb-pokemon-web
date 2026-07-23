@@ -1,7 +1,7 @@
 
-import { TradingProtocol } from './TradingProtocol.js';
-import { RSESPUtils, RSESPTradingPokemonInfo, RSESPTradingData } from './RSESPUtils.js';
-import { RSESPChecks } from './RSESPChecks.js';
+import { TradingProtocol } from './TradingProtocol.js?v=88';
+import { RSESPUtils, RSESPTradingPokemonInfo, RSESPTradingData } from './RSESPUtils.js?v=88';
+import { RSESPChecks } from './RSESPChecks.js?v=88';
 
 export class RSESPTrading extends TradingProtocol {
     constructor(usb, ws, logger, tradeType = 'pool', isBuffered = false, doSanityChecks = true, options = {}) {
@@ -22,6 +22,7 @@ export class RSESPTrading extends TradingProtocol {
         this.success_transfer = ["S3S1", "S3S2", "S3S3", "S3S4", "S3S5", "S3S6", "S3S7"];
 
         this.special_sections_len = [0x380]; // 896 bytes
+        this.SECTION_NAMES = ['Trade data']; // UI progress label
 
         // Protocol Control Flags
         this.done_control_flag = 0x20;
@@ -335,6 +336,7 @@ export class RSESPTrading extends TradingProtocol {
                             sinceLastUseful = 0;
                             completedData[index] = true;
                             numUncompleted--;
+                            this.onProgress?.(0, length - numUncompleted * 2, length);
 
                             if (numUncompleted % 50 === 0) {
                                 this.log(`Transferring: ${length - numUncompleted * 2}/${length}`);
@@ -661,6 +663,7 @@ export class RSESPTrading extends TradingProtocol {
             }
 
             this.log("Waiting for other player's data...");
+            this.onStatus?.("Waiting for the other player…");
             const otherData = await this.forceReceive(() => {
                 return this.getBigTradingData();
             });
@@ -690,6 +693,7 @@ export class RSESPTrading extends TradingProtocol {
 
         while (!tradeCompleted && !this.stopTrade) {
             // Get the user's choice from the GBA
+            this.onStatus?.('Pick a Pokémon on your GBA');
             const sentMon = await this.waitForChoice();
             if (this.stopTrade) return true;
 
@@ -710,6 +714,7 @@ export class RSESPTrading extends TradingProtocol {
                     // Get the other player's choice
                     if (!toServer) {
                         this.logVerbose("Waiting for other player's choice...");
+                        this.onStatus?.("Waiting for the other player's choice…");
                     }
                     received_choice = await this.forceReceive(getMonFunction);
                     if (this.stopTrade) return true;
@@ -750,6 +755,7 @@ export class RSESPTrading extends TradingProtocol {
 
                 // Check if trade was accepted
                 if (!this.isChoiceDecline(received_accepted, 1) && !this.isChoiceDecline(accepted, 1)) {
+                    this.onStatus?.('Trading…');
                     let success_result, received_success;
 
                     // Success loop (7 rounds)

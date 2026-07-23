@@ -9,9 +9,9 @@
  * - No eggs, no mail
  */
 
-import { GSCTrading } from './GSCTrading.js';
-import { RBYUtils } from './RBYUtils.js';
-import { RBYTradingData, RBYChecks } from './RBYTradingDataUtils.js';
+import { GSCTrading } from './GSCTrading.js?v=88';
+import { RBYUtils } from './RBYUtils.js?v=88';
+import { RBYTradingData, RBYChecks } from './RBYTradingDataUtils.js?v=88';
 
 export class RBYTrading extends GSCTrading {
     constructor(usb, ws, logger, tradeType = 'pool', isBuffered = false, doSanityChecks = true, options = {}) {
@@ -818,7 +818,9 @@ export class RBYTrading extends GSCTrading {
      */
     async getBigTradingDataRBY() {
         this.ws.sendGetData(this.MSG_FLL);
-        const fllData = await this.waitForMessage(this.MSG_FLL, 30000);
+        // The other player may not have sat down yet - wait at human timescale
+        this.onStatus?.('Waiting for the other player…');
+        const fllData = await this.waitForMessage(this.MSG_FLL, 300000);
 
         if (!fllData || fllData.length === 0) {
             this.log("No FLL1 data received");
@@ -855,6 +857,7 @@ export class RBYTrading extends GSCTrading {
             delete this.ws.sendDict[this.MSG_SUC];
 
             if (this.verbose) this.log("[DEBUG] RBY: Waiting for Pokemon selection...");
+            this.onStatus?.('Pick a Pokémon on your Game Boy');
             const choice = await this.waitForChoice(this.NO_INPUT, POSSIBLE_INDEXES, 10);
 
             if (this.stopTrade) break;
@@ -905,6 +908,7 @@ export class RBYTrading extends GSCTrading {
                 // IMPORTANT: Clear any stale CHC1 from previous trade first!
                 delete this.ws.recvDict[this.MSG_CHC];
                 this.log("Link: Waiting for peer's Pokemon selection (CHC1)...");
+                this.onStatus?.("Waiting for the other player's choice…");
                 this.ws.sendGetData(this.MSG_CHC);
                 // The peer is a human picking a mon - wait generously (Python
                 // waits forever); never fabricate a choice on their behalf.
@@ -939,6 +943,7 @@ export class RBYTrading extends GSCTrading {
             if (next === this.NO_DATA) next = await this.waitForNoInput(next);
 
             // Wait for GB accept/decline
+            this.onStatus?.('Confirm the trade on your Game Boy');
             const gbAccept = await this.waitForAcceptDecline(next);
             if (this.stopTrade) break;
 
@@ -986,6 +991,7 @@ export class RBYTrading extends GSCTrading {
 
             if (gbAccept === this.ACCEPT_TRADE && serverAccept === this.ACCEPT_TRADE) {
                 this.log("RBY: Trade accepted by both parties!");
+                this.onStatus?.('Trading…');
 
                 // Wait for success byte
                 const successByte = await this.waitForChoice(next, this.SUCCESS_VALUES, 10);
@@ -1019,6 +1025,7 @@ export class RBYTrading extends GSCTrading {
                     await this.waitForMessage(this.MSG_SUC, this.isLinkTrade ? 60000 : 5000);
 
                     this.log("RBY: Trade round completed successfully!");
+                    this.onStatus?.('Trade complete!', 'success');
 
                     // For pool trades: get a new Pokemon from the pool.
                     // (The mon we gave the server already went out inside CHC1;
@@ -1063,6 +1070,7 @@ export class RBYTrading extends GSCTrading {
                 }
             } else {
                 this.log("RBY: Trade declined. Returning to selection...");
+                this.onStatus?.('Trade declined — pick another Pokémon');
             }
         }
 

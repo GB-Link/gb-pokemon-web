@@ -67,9 +67,30 @@
         </div>
 
         <div class="card">
-            <h2>Logs</h2>
-            <div id="log-container"></div>
+            <h2>Status</h2>
+            <div class="trade-status-row">
+                <span id="status-indicator" class="trade-indicator"></span>
+                <p id="status-text">Connect your GB-Link adapter to begin</p>
+            </div>
+            <p id="status-detail"></p>
+            <div id="progress-wrap" class="progress-wrap hidden">
+                <div class="progress-header">
+                    <span id="progress-label"></span>
+                    <span id="progress-count"></span>
+                </div>
+                <div class="progress-track">
+                    <div id="progress-fill" class="progress-fill"></div>
+                </div>
+            </div>
         </div>
+
+        <details class="card log-card">
+            <summary>Logs</summary>
+            <div class="log-header-row">
+                <button id="btn-copy-log" class="log-copy-btn" type="button">Copy</button>
+            </div>
+            <div id="log-container"></div>
+        </details>
         <footer class="app-footer">
             <p>Version: 1.2.0</p>
             <p>
@@ -178,7 +199,7 @@
             </div>
         </div>
     </div>
-    <script type="module" src="src/main.js?v=v86"></script>
+    <script type="module" src="src/main.js?v=88"></script>
     <script src="src/launcher-return.js"></script>
 </body>
 
