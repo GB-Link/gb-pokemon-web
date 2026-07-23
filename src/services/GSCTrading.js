@@ -123,6 +123,14 @@ export class GSCTrading extends TradingProtocol {
     get MSG_SNG() { return "SNG2"; }
     get MSG_MVS() { return "MVS2"; }
     get MSG_ASK() { return "ASK2"; }
+    get MSG_FLL() { return "FLL2"; }
+    get MSG_POL() { return "POL2"; }
+    get MSG_CHC() { return "CHC2"; }
+    get MSG_ACP() { return "ACP2"; }
+    get MSG_SUC() { return "SUC2"; }
+    get MSG_VEC() { return "VEC2"; }
+    get MSG_VES() { return "VES2"; }
+    get MSG_RAN() { return "RAN2"; }
 
     /**
      * Check if a party has any Pokemon holding mail.
@@ -269,6 +277,7 @@ export class GSCTrading extends TradingProtocol {
         // Similar to enterRoom but for START_TRADING_STATES
         let stateIndex = 0;
         let consecutiveNoData = 0;
+        let readFailures = 0;
 
         while (stateIndex < this.START_TRADING_STATES[0].length && !this.stopTrade) {
             const nextByte = this.START_TRADING_STATES[0][stateIndex];
@@ -278,8 +287,9 @@ export class GSCTrading extends TradingProtocol {
             let recv;
             try {
                 recv = await this.usb.readByte();
+                readFailures = 0;
             } catch (e) {
-                recv = this.NO_DATA;
+                recv = this.failedRead(e, ++readFailures);
             }
 
             const expectedStates = this.START_TRADING_STATES[1][stateIndex];
@@ -420,12 +430,15 @@ export class GSCTrading extends TradingProtocol {
             if (this.verbose) this.log("Getting Pool Data...");
             this.ws.sendGetData("POL2");
             const poolData = await this.waitForMessage("POL2");
-            if (this.verbose) this.log(`Pool Data received: ${poolData.length} bytes`);
 
-            // Clear POL2 from cache so next trade fetches fresh data
-            // waitForMessage checks recvDict first and returns cached data if present
-            // Without clearing, the 2nd trade would get the SAME pool Pokemon as 1st trade
-            delete this.ws.recvDict["POL2"];
+            // Python kills the trade on the pool-failure reply
+            // ([counter, fail_value], length 2) instead of fabricating a mon.
+            if (!poolData || poolData.length <= 2) {
+                this.log("[ERROR] Pool unavailable (empty pool or server failure). Aborting trade.");
+                this.stopTrade = true;
+                return;
+            }
+            if (this.verbose) this.log(`Pool Data received: ${poolData.length} bytes`);
 
             // === POOL TRADING: EGG CONVERSION ===
 
@@ -464,6 +477,11 @@ export class GSCTrading extends TradingProtocol {
         // Section 2: Patches
         if (this.verbose) this.log("Sending Section 2 (Patches)...");
         const gbPatchData = await this.readSection(2, tradeData.section2);
+
+        // Decode our party: the wire form has 0xFE bytes escaped to 0xFF with
+        // the patch section listing their positions (Python apply_patches).
+        // Without this, CHC2/MVS2 would send patch-escaped bytes to the peer.
+        GSCUtils.applyPatches(this.gbPartyData, gbPatchData, false);
 
         // === MAIL DETECTION ===
         // ref impl checks party_has_mail() after Section 1+2 to decide if Section 3 needs sync.
@@ -510,13 +528,23 @@ export class GSCTrading extends TradingProtocol {
 
         // === CACHE PEER SECTIONS FOR SUBSEQUENT TRADES ===
         // ref impl uses cached other_pokemon data for trade 2+ (trade_starting_sequence with buffered=True)
-        // Store all peer sections so subsequentTradeSequence can reuse them
+        // The party is cached DECODED (peer's patches applied) so trade-menu
+        // edits happen on real bytes; the wire patch section is regenerated at
+        // reuse time. The peer's real patch/mail sections replace the previous
+        // mirror-what-we-sent cache. When neither side has mail, the peer's
+        // mail section equals our own empty one, so processedMailData is a
+        // valid stand-in when no peer mail was captured.
         if (!this.isBuffered && this.peerPartyData) {
+            const peerParty = new Uint8Array(this.peerPartyData);
+            if (this.peerPatchData) {
+                GSCUtils.applyPatches(peerParty, this.peerPatchData, false);
+            }
+            this.cachedPeerPartyDecoded = !!this.peerPatchData;
             this.bufferedOtherData = [
                 randomData,           // Section 0: Random
-                this.peerPartyData,   // Section 1: Pokemon (received during sync)
-                tradeData.section2,   // Section 2: Patches (just mirror what we sent)
-                processedMailData     // Section 3: Mail (converted for JP if needed)
+                peerParty,            // Section 1: Pokemon (decoded)
+                this.peerPatchData ? new Uint8Array(this.peerPatchData) : tradeData.section2,
+                this.peerMailData ? new Uint8Array(this.peerMailData) : processedMailData
             ];
             if (this.verbose) this.log("[DEBUG] Cached peer sections for subsequent trades");
         }
@@ -538,6 +566,7 @@ export class GSCTrading extends TradingProtocol {
             const peerSections = await this.getBigTradingData();
             if (peerSections) {
                 this.bufferedOtherData = peerSections;
+                this.cachedPeerPartyDecoded = false; // FLL data is raw wire form
                 this.log("Buffered Data Exchange Complete. Canceling ghost trade...");
 
                 // Signal to cancel this trade and return to table
@@ -1068,11 +1097,11 @@ export class GSCTrading extends TradingProtocol {
             // This allows the GB to process and transition to accept/decline state
             // Use NO LIMIT (0) to ensure we ALWAYS wait until GB acknowledges with NO_DATA
             // If we proceed without NO_DATA, we'll send ACCEPT while GB is still in selection phase!
-            next = await this.waitForNoData(next, serverChoice, 0);
-            this.log(`After wait_for_no_data, recv: 0x${next.toString(16)}`);
+            next = await this.waitForNoData(next, serverChoice, 20);
+            if (this.verbose) this.log(`After wait_for_no_data, recv: 0x${next.toString(16)}`);
 
             // After getting NO_DATA, wait for NO_INPUT
-            next = await this.waitForNoInput(next);
+            if (next === this.NO_DATA) next = await this.waitForNoInput(next);
             this.log(`After wait_for_no_input, recv: 0x${next.toString(16)}`);
 
             // 5. Wait for GB's accept/decline decision
@@ -1094,9 +1123,17 @@ export class GSCTrading extends TradingProtocol {
             const serverAcceptData = await this.getServerData("ACP2");
             this.log(`Server accept response: ${serverAcceptData ? serverAcceptData.length : 0} bytes`);
 
-            // 6. For pool trade, server always accepts (but we got the actual response above)
-            const serverAccept = ACCEPT_TRADE;
-            this.log(`Server decision: ACCEPT`);
+            // 6. Use the server's REAL decision ([counter, accept/decline]); the
+            // server declines when the offered mon fails its sanity checks, and
+            // forcing an accept makes it commit garbage into the shared pool.
+            let serverAccept;
+            if (serverAcceptData && serverAcceptData.length >= 2) {
+                serverAccept = serverAcceptData[1];
+                this.log(`Server decision: ${serverAccept === ACCEPT_TRADE ? 'ACCEPT' : 'DECLINE'}`);
+            } else {
+                this.log("[WARN] No server accept received, declining");
+                serverAccept = DECLINE_TRADE;
+            }
 
             // 7. Send server's decision to GB
             next = await this.exchangeByte(serverAccept);
@@ -1104,11 +1141,10 @@ export class GSCTrading extends TradingProtocol {
 
             // After sending accept, do the same synchronization as after sending choice
             // Increase limitResends to ensure we clear the echo (use 0 for no limit)
-            next = await this.waitForNoData(next, serverAccept, 0);
-            this.log(`After accept wait_for_no_data, recv: 0x${next.toString(16)}`);
+            next = await this.waitForNoData(next, serverAccept, 20);
+            if (this.verbose) this.log(`After accept wait_for_no_data, recv: 0x${next.toString(16)}`);
 
-            // Always wait for NO_INPUT
-            next = await this.waitForNoInput(next);
+            if (next === this.NO_DATA) next = await this.waitForNoInput(next);
             this.log(`After accept wait_for_no_input, recv: 0x${next.toString(16)}`);
 
             if (gbAccept === ACCEPT_TRADE && serverAccept === ACCEPT_TRADE) {
@@ -1135,11 +1171,10 @@ export class GSCTrading extends TradingProtocol {
                     // Post-trade cleanup synchronization
                     // This allows GB to complete trade and reset for next trade
                     // Keep sending the SUCCESS BYTE until we receive NO_DATA (No Limit)
-                    next = await this.waitForNoData(next, successByte, 0);
-                    this.log(`After post-trade wait_for_no_data, recv: 0x${next.toString(16)}`);
+                    next = await this.waitForNoData(next, successByte, 20);
+                    if (this.verbose) this.log(`After post-trade wait_for_no_data, recv: 0x${next.toString(16)}`);
 
-                    // Always wait for NO_INPUT
-                    next = await this.waitForNoInput(next);
+                    if (next === this.NO_DATA) next = await this.waitForNoInput(next);
                     this.log(`After post-trade wait_for_no_input, recv: 0x${next.toString(16)}`);
 
                     // Clear buffers - ensure we're in a clean state before next trade
@@ -1542,8 +1577,8 @@ export class GSCTrading extends TradingProtocol {
             let next = await this.exchangeByte(peerChoice);
             this.log(`Sent peer choice to GB, recv: 0x${next.toString(16)}`);
 
-            next = await this.waitForNoData(next, peerChoice, 0);
-            next = await this.waitForNoInput(next);
+            next = await this.waitForNoData(next, peerChoice, 20);
+            if (next === this.NO_DATA) next = await this.waitForNoInput(next);
 
             // 7. Wait for our GB's accept/decline
             const ourAccept = await this.waitForAcceptDecline(next);
@@ -1565,8 +1600,8 @@ export class GSCTrading extends TradingProtocol {
 
             // 10. Send peer's accept to our GB
             next = await this.exchangeByte(peerAccept);
-            next = await this.waitForNoData(next, peerAccept, 0);
-            next = await this.waitForNoInput(next);
+            next = await this.waitForNoData(next, peerAccept, 20);
+            if (next === this.NO_DATA) next = await this.waitForNoInput(next);
 
             // 11. Handle trade outcome
             if (ourAccept === ACCEPT_TRADE && peerAccept === ACCEPT_TRADE) {
@@ -1649,8 +1684,8 @@ export class GSCTrading extends TradingProtocol {
                 // Send OUR success byte back to GB to confirm trade
                 // ref impl uses success_list[0] which is the local expected success (0x70 for normal trades)
                 next = await this.exchangeByte(ourSuccess);
-                next = await this.waitForNoData(next, ourSuccess, 0);
-                next = await this.waitForNoInput(next);
+                next = await this.waitForNoData(next, ourSuccess, 20);
+                if (next === this.NO_DATA) next = await this.waitForNoInput(next);
 
                 this.log("Trade completed successfully!");
 
@@ -1951,45 +1986,36 @@ export class GSCTrading extends TradingProtocol {
      * @returns {Uint8Array} - Modified data with egg properties
      */
     convertPoolPokemonToEgg(poolData) {
-        // Pool data format for single Pokemon:
-        // [0] = species ID (party header)
-        // [1-47] = Core Pokemon data (0x30 = 48 bytes)
-        //   Offset 0x01: Species
-        //   Offset 0x02: Item
-        //   Offset 0x20: HP (2 bytes - big endian)
-        //   Offset 0x2F: Happiness (used for hatching cycles in eggs)
-        // [48-58] = OT Name (0x0B = 11 bytes)
-        // [59-69] = Nickname (0x0B = 11 bytes)
-
+        // Pool data layout (Python single_mon_to_data, no header byte):
+        // [0-47] core struct (species at 0, cycles at 0x1B, status at 0x20,
+        // HP at 0x22-0x23), [48-58] OT name, [59-69] nickname, then mail/sender
+        // and a trailing egg-flag byte (0x38 = egg). Egg-ness is signaled via
+        // that flag; the real species byte stays untouched.
         const data = new Uint8Array(poolData);
 
-        // 1. Set species ID in party header to EGG_ID (0xFD)
-        // The first byte of pool data is the species ID in the party header
-        data[0] = GSCUtils.EGG_ID;
-        this.log(`[POOL-EGG] Set party species ID to EGG (0xFD)`);
+        // 1. Hatching cycles (Python set_hatching_cycles default = 1)
+        data[0x1B] = 1;
 
-        // 2. Set hatching cycles (stored in happiness byte at offset 0x2F within Pokemon struct)
-        // Pokemon struct starts at byte 1 (after party header species byte)
-        const POKEMON_STRUCT_OFFSET = 1;
-        const HATCHING_CYCLES_OFFSET = POKEMON_STRUCT_OFFSET + 0x2F; // Happiness/hatching cycles
-        data[HATCHING_CYCLES_OFFSET] = 5; // Default hatching cycles
-        this.log(`[POOL-EGG] Set hatching cycles to 5`);
+        // 2. Faint the Pokemon (Python faint(): HP = 0, status = 0)
+        data[0x20] = 0;
+        data[0x22] = 0;
+        data[0x23] = 0;
 
-        // 3. Faint the Pokemon (set HP to 0)
-        const HP_OFFSET = POKEMON_STRUCT_OFFSET + 0x20; // HP is at offset 0x20-0x21 in Pokemon struct
-        data[HP_OFFSET] = 0;      // HP high byte
-        data[HP_OFFSET + 1] = 0;  // HP low byte
-        this.log(`[POOL-EGG] Set HP to 0 (fainted)`);
-
-        // 4. Set nickname to "EGG"
-        // Nickname is at offset 48 + 11 = 59 (after OT name)
-        const NICKNAME_OFFSET = POKEMON_STRUCT_OFFSET + 0x30 + 0x0B; // After Pokemon struct + OT name
+        // 3. Set nickname to "EGG" (offset 48 + 11 = 59, after OT name)
+        const NICKNAME_OFFSET = 0x30 + 0x0B;
         // EGG in Game Boy encoding: E=0x84, G=0x86, G=0x86, terminated with 0x50
         const EGG_NICKNAME = [0x84, 0x86, 0x86, 0x50, 0x50, 0x50, 0x50, 0x50, 0x50, 0x50, 0x50];
         for (let i = 0; i < 11; i++) {
             data[NICKNAME_OFFSET + i] = EGG_NICKNAME[i];
         }
-        this.log(`[POOL-EGG] Set nickname to 'EGG'`);
+
+        // 4. Trailing egg flag: createTradingData turns this into the party-list
+        // EGG_ID (0xFD)
+        const EGG_FLAG_OFFSET = 0x75; // 48 + 11 + 11 + 33 + 14
+        if (data.length > EGG_FLAG_OFFSET) {
+            data[EGG_FLAG_OFFSET] = GSCUtils.EGG_VALUE;
+        }
+        this.log(`[POOL-EGG] Converted pool Pokemon to egg (cycles=1, fainted, EGG nickname)`);
 
         return data;
     }
@@ -2252,8 +2278,9 @@ export class GSCTrading extends TradingProtocol {
                 // For link trade: wait for background negotiation to complete (like force_receive)
                 if (this.isLinkTrade && negotiationPromise) {
                     this.log("Link Trade: Waiting for background negotiation to complete...");
-                    await negotiationPromise;
-                    negotiationPromise = null; // Only wait once
+                    const pendingNegotiation = negotiationPromise;
+                    negotiationPromise = null; // Only wait once - even if it throws
+                    await pendingNegotiation;
                     this.log(`Link Trade: Negotiation complete. Mode: ${this.isBuffered ? 'Buffered' : 'Sync'}`);
                 }
 
@@ -2397,9 +2424,19 @@ export class GSCTrading extends TradingProtocol {
         }
 
         this.log("Using cached peer party data for trade...");
+        let sendParty = this.bufferedOtherData[1];
+        let sendPatches = this.bufferedOtherData[2];
+        if (this.cachedPeerPartyDecoded) {
+            // The cached party is decoded: re-escape 0xFE bytes and rebuild the
+            // patch section (createPatchesData edits the party clone in place),
+            // like Python create_trading_data does for every re-send.
+            sendParty = new Uint8Array(this.bufferedOtherData[1]);
+            sendPatches = new Uint8Array(this.bufferedOtherData[2]);
+            GSCUtils.createPatchesData(sendParty, sendPatches, false);
+        }
         const tradeData = {
-            section1: this.bufferedOtherData[1],
-            section2: this.bufferedOtherData[2],
+            section1: sendParty,
+            section2: sendPatches,
             section3: this.bufferedOtherData[3]
         };
 
@@ -2553,10 +2590,24 @@ export class GSCTrading extends TradingProtocol {
         const ret = {};
         if (!recvBuf) return ret;
 
+        // Mirrors Python prepare_single_entry_new: an entry for a LATER section
+        // means the peer moved on (treat as our completion); only entries for
+        // THIS section are consumable; earlier-section stragglers are ignored.
         for (let i = 0; i < this.TOTAL_SEND_BUF_NEW_BYTES; i++) {
             const entry = recvBuf[i];
-            if (entry && entry[0] !== 0xFFFF && entry[0] < length) {
-                ret[entry[0]] = entry[1];
+            if (!entry) continue;
+            if (entry[0] === 0xFFFF) continue; // sync marker, not data
+            if (entry[2] > index) {
+                ret[length] = 0;
+            } else if (entry[2] === index && entry[0] <= length) {
+                if (entry[3]) {
+                    // Filler entry: expands to extra_bits repeated bytes
+                    for (let j = 0; j < entry[4]; j++) {
+                        ret[entry[0] + j] = entry[1];
+                    }
+                } else {
+                    ret[entry[0]] = entry[1];
+                }
             }
         }
         return ret;
@@ -2634,7 +2685,19 @@ export class GSCTrading extends TradingProtocol {
      */
     async getTradeData() {
         const data = this.ws.recvDict[this.MSG_SNG];
-        if (!data) return null;
+        if (!data) {
+            // Pull-based recovery like Python's recv_data: when nothing has
+            // arrived, ask the peer's stored send buffer for its latest packet.
+            const now = Date.now();
+            if (!this._lastSngGet || now - this._lastSngGet > 100) {
+                this._lastSngGet = now;
+                this.ws.sendGetData(this.MSG_SNG);
+            }
+            return null;
+        }
+        // Consume-once, matching Python's recv_dict pop: a stale packet must
+        // never be re-parsed across polls, sections, or trades.
+        delete this.ws.recvDict[this.MSG_SNG];
 
         // Auto-detect protocol from packet size
         if (data.length >= 32) {
@@ -2692,13 +2755,16 @@ export class GSCTrading extends TradingProtocol {
     /**
      * Create data packet with current position data
      */
-    createDataPacket(sendBufData) {
+    createDataPacket(sendBufData, index = 0) {
         const sendBuf = [];
         for (let i = 0; i < this.TOTAL_SEND_BUF_NEW_BYTES; i++) {
             if (sendBufData[i]) {
                 sendBuf.push(sendBufData[i]);
             } else {
-                sendBuf.push([0xFFFF, 0xFF, 0, false, 0]);
+                // Filler entries must carry the section index: Python peers read
+                // slot 7's extra_val as the sync-marker section and kill the
+                // trade as "incompatible" if it doesn't match.
+                sendBuf.push([0xFFFF, 0xFF, index, false, 0]);
             }
         }
         return sendBuf;
@@ -2715,16 +2781,17 @@ export class GSCTrading extends TradingProtocol {
         this.log(`Sync Section ${index}: Waiting for peer synchronization...`);
 
         let found = false;
-        let lastRequestTime = 0;
+        let wrongIndexMarkers = 0;
+        let waitIterations = 0;
+        const MAX_SYNC_WAIT_ITERATIONS = 3000; // * ~100ms = ~5 minutes
         while (!found && !this.stopTrade) {
-            // Request peer data periodically to recover from packet loss
-            // ref impl only sends the sync packet once, so we must ask for it if lost
-            if (Date.now() - lastRequestTime > 500) {
-                this.ws.sendGetData(this.MSG_SNG);
-                lastRequestTime = Date.now();
+            if (++waitIterations > MAX_SYNC_WAIT_ITERATIONS) {
+                this.log(`[ERROR] Sync Section ${index}: Other player never synchronized. Aborting trade.`);
+                this.stopTrade = true;
+                return;
             }
 
-            // Poll for peer's sync marker
+            // Poll for peer's sync marker (getTradeData pulls via GET when empty)
             const recvBuf = await this.getTradeData();
             if (recvBuf) {
                 // Debug log content periodically
@@ -2744,6 +2811,16 @@ export class GSCTrading extends TradingProtocol {
                     if (lastEntry && lastEntry[0] === 0xFFFF && lastEntry[2] === index) {
                         found = true;
                         this.log(`Sync Section ${index}: Peer synchronized!`);
+                    } else if (lastEntry && lastEntry[0] === 0xFFFF &&
+                               lastEntry[2] !== index && lastEntry[2] !== index - 1) {
+                        // Python kills the trade when the peer's sync marker is
+                        // for an unrelated section (incompatible trade states).
+                        // A marker for the PREVIOUS section is just a straggler.
+                        if (++wrongIndexMarkers >= 5) {
+                            this.log(`[ERROR] Sync Section ${index}: Other player is at section ${lastEntry[2]} - incompatible trade state. Aborting.`);
+                            this.stopTrade = true;
+                            return;
+                        }
                     } else {
                         // Check if peer already sending valid data (implicit sync)
                         const hasValidData = recvBuf.some(e => e[0] !== 0xFFFF && e[2] === index);
@@ -2803,106 +2880,181 @@ export class GSCTrading extends TradingProtocol {
         sendBufData[0] = [0, firstByte, index, false, 0];
         let sendIndex = 1;
         let recvData = {};
-        let i = 0;
 
         this.log(`Sync Exchange Section ${index}: Starting (${length} bytes)`);
 
-        while (i < length && !this.stopTrade) {
-            // Send our current bytes to peer
-            const sendBuf = this.createDataPacket(sendBufData);
-            this.sendTradeData(sendBuf);
+        if (this.useNewProtocol) {
+            // Faithful port of Python synch_exchange_section_new: the GB streams
+            // its section at its own paced cadence (posSend advances on every
+            // transfer) while peer data is fed to it lagging behind (iFeed <=
+            // posRecv), within a small tolerance window. Network latency adds
+            // LAG, not per-byte cost, so a section takes ~length * pacing
+            // instead of length * round-trips. A starved forced transfer feeds
+            // NO_INPUT to the GB and counts as a dropped byte (bytesOffset),
+            // exactly like Python; the section tail absorbs the slack.
+            const MAX_TOLERANCE_BYTES = 3;
+            const SAFETY_AMOUNT = MAX_TOLERANCE_BYTES - 2;
+            const PACING_MS = 15; // Python sleep_func(0.02); USB latency adds the rest
+            const MAX_MS_BETWEEN_TRANSFERS = 800; // Python max_seconds_between_transfers
+            let posSend = 1;   // next position for our GB's bytes (0 = firstByte)
+            let posRecv = 0;   // contiguous peer bytes buffered into otherBuf
+            let iFeed = 0;     // next peer byte to feed the GB
+            let bytesOffset = 1;
+            const bytesOffsetTarget = MAX_TOLERANCE_BYTES;
+            let lastTransfer = Date.now();
 
-            // Poll for peer's data until we have byte i
-            let pollCount = 0;
-            const MAX_POLL_COUNT = 1000; // 1000 * 10ms = 10 seconds max per position
-            while (!(i in recvData) && !this.stopTrade && pollCount < MAX_POLL_COUNT) {
-                // Send our current data on EVERY poll to prevent deadlock
-                // (Both sides might be waiting for each other)
-                this.sendTradeData(sendBuf);
+            this.sendTradeData(this.createDataPacket(sendBufData, index));
 
+            while (iFeed < (length - MAX_TOLERANCE_BYTES) && !this.stopTrade) {
                 const recvBuf = await this.getTradeData();
                 if (recvBuf) {
-                    // Extract available bytes based on protocol
-                    const newData = this.useNewProtocol
-                        ? this.getSwappableBytesNew(recvBuf, length, index)
-                        : this.getSwappableBytesOld(recvBuf, length, index);
-                    Object.assign(recvData, newData);
-                }
-
-                if (!(i in recvData)) {
-                    await this.sleep(10);
-                    pollCount++;
-                    if (pollCount % 50 === 0) {
-                        // Log progress every 500ms to help debug
-                        const recvKeys = Object.keys(recvData).map(k => parseInt(k)).sort((a, b) => a - b);
-                        if (this.verbose) this.log(`[DEBUG] Section ${index} waiting for pos ${i}, have: ${recvKeys.slice(-5).join(', ')}...`);
+                    Object.assign(recvData, this.getSwappableBytesNew(recvBuf, length, index));
+                    while (recvData[posRecv] !== undefined && posRecv < length) {
+                        const raw = recvData[posRecv] & 0xFF;
+                        // Python prevent_no_input: the receiver converts the
+                        // NO_INPUT control code to 0xFF before it can reach the GB
+                        otherBuf.push(raw === 0xFE ? 0xFF : raw);
+                        posRecv++;
                     }
                 }
-            }
 
-            if (pollCount >= MAX_POLL_COUNT) {
-                this.log(`[WARN] Section ${index}: Timeout waiting for position ${i}, received positions: ${Object.keys(recvData).length}`);
-                break; // Exit the main loop on timeout
-            }
-
-            if (i in recvData && i < length) {
-                const peerByte = recvData[i] & 0xFF;
-
-                // Ignore NO_INPUT (0xFE) from peer (wait/keep-alive signal)
-                if (peerByte === 0xFE) {
-                    delete recvData[i];
-                    await this.sleep(5);
-                    continue;
+                let byteToConsole = this.NO_INPUT;
+                let schedule = false;
+                if (Date.now() - lastTransfer >= MAX_MS_BETWEEN_TRANSFERS) schedule = true;
+                if (bytesOffset < bytesOffsetTarget) {
+                    schedule = true;
+                } else if (posRecv > iFeed) {
+                    byteToConsole = otherBuf[iFeed];
+                    if (posRecv > (iFeed + SAFETY_AMOUNT)) schedule = true;
+                    if (schedule) iFeed++;
                 }
 
-                // Clean byte and send to GB
-                // ref impl converts 0xFE->0xFF, so valid 0xFE data comes as 0xFF
-                // Thus if we receive 0xFE, it is definitely a control code to wait
-                const cleanByte = peerByte;
-
-                // Exchange with GB: send peer's byte, receive our next byte
-                const nextByte = await this.exchangeByte(cleanByte);
-
-                const nextI = i + 1;
-
-                // Clean outgoing byte to prevent check_bad_data from triggering
-                // At certain positions (e.g., 441+ for Section 1), 0xFD is flagged as "dropped byte"
-                // Transform it to 0xFF to avoid false positives (same as prevent_no_input for 0xFE)
-                let cleanedNextByte = nextByte;
-                const checkStart = this.DROP_BYTES_CHECK_START[index];
-                const badValue = this.DROP_BYTES_CHECK_VALUE[index];
-                if (nextI >= checkStart && nextByte === badValue) {
-                    cleanedNextByte = 0xFF; // Transform to safe value
-                    this.log(`[WARN] Cleaned byte at position ${nextI}: 0x${badValue.toString(16)} -> 0xFF`);
+                if (schedule) {
+                    if (byteToConsole === this.NO_INPUT) {
+                        bytesOffset++;
+                        if (bytesOffset > bytesOffsetTarget) {
+                            // Python act_on_bad_data: a real byte was dropped
+                            if (this.crashOnSyncDrop) {
+                                this.log(`[ERROR] Section ${index}: no data from the other player - byte dropped. Aborting trade.`);
+                                this.stopTrade = true;
+                                throw new Error(`Section ${index} byte drop (fed ${iFeed}/${length})`);
+                            }
+                            this.log(`[WARN] Section ${index}: dropped byte (${bytesOffset - bytesOffsetTarget})`);
+                            if (bytesOffset > bytesOffsetTarget + 20) {
+                                this.log(`[ERROR] Section ${index}: other player stopped sending data. Aborting trade.`);
+                                this.stopTrade = true;
+                                throw new Error(`Section ${index} starved (fed ${iFeed}/${length})`);
+                            }
+                        }
+                    }
+                    const nextByte = await this.exchangeByte(byteToConsole);
+                    buf.push(nextByte);
+                    sendBufData[sendIndex % this.TOTAL_SEND_BUF_NEW_BYTES] = [posSend, nextByte, index, false, 0];
+                    sendIndex++;
+                    posSend++;
+                    this.sendTradeData(this.createDataPacket(sendBufData, index));
+                    lastTransfer = Date.now();
+                    if (this.verbose && posSend % 50 === 0) {
+                        this.log(`Sync Section ${index}: sent ${posSend}/${length}, fed ${iFeed}, received ${posRecv}`);
+                    }
                 }
 
-                // Update our buffers
-                otherBuf.push(cleanByte);
-                buf.push(nextByte);  // Store original from GB
+                await this.sleep(PACING_MS);
+            }
 
-                // Update send buffer for next position
-                // OLD protocol: Use (nextI) & 1 to match send_buf[(next_i)&1] exactly
-                // NEW protocol: Use sendIndex % 8
-                const slotIndex = this.useNewProtocol
-                    ? (sendIndex % this.TOTAL_SEND_BUF_NEW_BYTES)
-                    : (nextI & 1);  // Match ref impl exactly for OLD protocol
-                sendBufData[slotIndex] = [nextI, cleanedNextByte, index, false, 0];  // Send cleaned byte
+            // Tail: Python feeds NO_DATA for the remaining offset slack
+            while (iFeed < (length - bytesOffset) && !this.stopTrade) {
+                const nextByte = await this.exchangeByte(this.NO_DATA);
+                buf.push(nextByte);
+                sendBufData[sendIndex % this.TOTAL_SEND_BUF_NEW_BYTES] = [posSend, nextByte, index, false, 0];
                 sendIndex++;
+                posSend++;
+                this.sendTradeData(this.createDataPacket(sendBufData, index));
+                iFeed++;
+                await this.sleep(PACING_MS);
+            }
 
-                if (i < 10 || i % 50 === 0 || i >= 440) {
-                    this.log(`Sync Section ${index} Byte ${i}: PeerSend=${cleanByte.toString(16)}, OurRecv=${nextByte.toString(16)}, nextI=${nextI}${cleanedNextByte !== nextByte ? ' (cleaned)' : ''}`);
+            // Python pads both buffers to the section length
+            while (buf.length < length) buf.push(this.NO_DATA);
+            while (otherBuf.length < length) otherBuf.push(this.NO_DATA);
+        } else {
+            // OLD protocol (7-byte packets, Python compat-3 mode) is strict
+            // per-byte lockstep, matching Python synch_exchange_section_old.
+            const RESEND_INTERVAL_MS = 300; // loss-recovery re-send while waiting
+            let lastResend = 0;
+            let i = 0;
+
+            while (i < length && !this.stopTrade) {
+                // Send our current bytes to peer (once per new position; the peer
+                // pulls via GET if this packet is lost)
+                const sendBuf = this.createDataPacket(sendBufData, index);
+                this.sendTradeData(sendBuf);
+                lastResend = Date.now();
+
+                // Poll for peer's data until we have byte i
+                let pollCount = 0;
+                const MAX_POLL_COUNT = 1000; // 1000 * 10ms = 10 seconds max per position
+                while (!(i in recvData) && !this.stopTrade && pollCount < MAX_POLL_COUNT) {
+                    const recvBuf = await this.getTradeData();
+                    if (recvBuf) {
+                        Object.assign(recvData, this.getSwappableBytesOld(recvBuf, length, index));
+                    }
+
+                    if (!(i in recvData)) {
+                        if (Date.now() - lastResend > RESEND_INTERVAL_MS) {
+                            this.sendTradeData(sendBuf);
+                            lastResend = Date.now();
+                        }
+                        await this.sleep(10);
+                        pollCount++;
+                    }
                 }
 
-                i++;
+                if (pollCount >= MAX_POLL_COUNT) {
+                    // Python kills the trade on a desynced exchange; continuing with
+                    // a truncated section previously let one side walk to the trade
+                    // menu alone with corrupt data.
+                    this.log(`[ERROR] Section ${index}: Timeout waiting for position ${i} from the other player. Aborting trade.`);
+                    this.stopTrade = true;
+                    throw new Error(`Section ${index} exchange timeout at position ${i}`);
+                }
+
+                if (i in recvData && i < length) {
+                    const peerByte = recvData[i] & 0xFF;
+
+                    // Python prevent_no_input semantics: the peer's GB sends its
+                    // bytes raw; the receiver converts 0xFE (NO_INPUT control code)
+                    // to 0xFF before feeding the GB.
+                    const cleanByte = (peerByte === 0xFE) ? 0xFF : peerByte;
+
+                    // Exchange with GB: send peer's byte, receive our next byte
+                    const nextByte = await this.exchangeByte(cleanByte);
+
+                    const nextI = i + 1;
+
+                    // Update our buffers
+                    otherBuf.push(cleanByte);
+                    buf.push(nextByte);  // Store original from GB
+
+                    // OLD protocol slot: (nextI) & 1 matches ref impl send_buf[(next_i)&1]
+                    sendBufData[nextI & 1] = [nextI, nextByte, index, false, 0];
+                    sendIndex++;
+
+                    if (this.verbose && (i < 10 || i % 50 === 0)) {
+                        this.log(`Sync Section ${index} Byte ${i}: PeerSend=${cleanByte.toString(16)}, OurRecv=${nextByte.toString(16)}, nextI=${nextI}`);
+                    }
+
+                    i++;
+                }
             }
         }
 
         // IMPORTANT: Send our current data immediately after main loop exits
         // This ensures ref impl receives the last position we added before we enter the handshake
         if (!this.stopTrade) {
-            const preFinalBuf = this.createDataPacket(sendBufData);
+            const preFinalBuf = this.createDataPacket(sendBufData, index);
             this.sendTradeData(preFinalBuf);
-            this.log(`Sync Section ${index}: Sent pre-final packet after main loop`);
+            if (this.verbose) this.log(`Sync Section ${index}: Sent pre-final packet after main loop`);
         }
 
         // Final handshake: loop is `while i < (length + 1)` so it waits for position 'length'
@@ -2928,12 +3080,16 @@ export class GSCTrading extends TradingProtocol {
             // Wait for completion marker while sending ours
             let peerCompleted = false;
             let attempts = 0;
-            const MAX_HANDSHAKE_ATTEMPTS = 100; // 100 * 50ms = 5 seconds max
+            const MAX_HANDSHAKE_ATTEMPTS = 200; // 200 * 50ms = 10 seconds max
+            let lastMarkerSend = 0;
 
             while (!peerCompleted && !this.stopTrade && attempts < MAX_HANDSHAKE_ATTEMPTS) {
-                // Send our completion marker
-                const finalSendBuf = this.createDataPacket(sendBufData);
-                this.sendTradeData(finalSendBuf);
+                // Send our completion marker (throttled; peer pulls via GET too)
+                if (Date.now() - lastMarkerSend > 300) {
+                    const finalSendBuf = this.createDataPacket(sendBufData, index);
+                    this.sendTradeData(finalSendBuf);
+                    lastMarkerSend = Date.now();
+                }
 
                 // Check for completion marker
                 const recvBuf = await this.getTradeData();
@@ -2961,7 +3117,11 @@ export class GSCTrading extends TradingProtocol {
             }
 
             if (!peerCompleted && !this.stopTrade) {
-                this.log(`[WARN] Sync Section ${index}: Peer completion not received after ${attempts} attempts, continuing anyway...`);
+                // Advancing without the peer previously let one side reach the
+                // trade menu alone; abort both sides cleanly instead.
+                this.log(`[ERROR] Sync Section ${index}: Other player never confirmed completion. Aborting trade.`);
+                this.stopTrade = true;
+                throw new Error(`Section ${index} completion handshake timeout`);
             }
         }
 
@@ -3107,18 +3267,57 @@ export class GSCTrading extends TradingProtocol {
         }
 
         // 2. Preamble Stage 1: Wait for Starter (0xFD)
-        // We send 0xFD to tell GB we are ready.
-        let byteToSend = starter;
-        let recv = this.NO_DATA;
+        // Python (gsc_trading.py read_section): synced sections clock the GB
+        // with NO_INPUT while waiting — sending the starter early can release
+        // the GB through its preamble before we are watching for it. Exchanges
+        // are paced to the GB's per-frame cadence; hammering faster reads
+        // NO_DATA between frames.
+        const SPECIAL_SECTIONS_SYNC = [true, true, true, false];
+        const PREAMBLE_PACING_MS = 20;
+        const MAX_PREAMBLE_ITERATIONS = 1500; // * 20ms = 30s per stage
+        const stage1Byte = SPECIAL_SECTIONS_SYNC[index] ? this.NO_INPUT : starter;
+        // Python initializes recv = next (the stage-1 byte). For the mail
+        // section that equals the starter, so stage 1 is SKIPPED entirely -
+        // the game never echoes 0x20; the master simply starts sending it.
+        // Waiting here for a 0x20 echo hangs every Gen 2 no-mail trade.
+        let recv = stage1Byte;
+        let preambleIterations = 0;
 
         while (recv !== starter && !this.stopTrade) {
-            recv = await this.exchangeByte(byteToSend);
+            await this.sleep(PREAMBLE_PACING_MS);
+            recv = await this.exchangeByte(stage1Byte);
+            if (++preambleIterations > MAX_PREAMBLE_ITERATIONS) {
+                this.log(`[ERROR] Section ${index}: Game Boy never presented the section starter`);
+                this.stopTrade = true;
+                throw new Error(`Section ${index} preamble timeout (stage 1)`);
+            }
         }
 
         // 3. Preamble Stage 2: Sync with Device (Wait for Data Start)
+        // NO_DATA (0x00) means "no fresh byte from the GB", never real data,
+        // for the party and patch sections (their first byte is never 0) —
+        // accepting it here previously desynced the two players at section 2.
         let next = starter;
-        while (next === starter && !this.stopTrade) {
-            next = await this.exchangeByte(starter);
+        preambleIterations = 0;
+        if (index === 0 && !useSyncForSection) {
+            // Python counts the random section's preamble instead of scanning
+            // for a non-starter byte: the first random byte can be 0xFD.
+            for (let k = 0; k < this.SPECIAL_SECTIONS_PREAMBLE_LEN[0] + 1 && !this.stopTrade; k++) {
+                await this.sleep(PREAMBLE_PACING_MS);
+                next = await this.exchangeByte(starter);
+                if (next !== starter) break;
+            }
+        } else {
+            while ((next === starter ||
+                    (next === this.NO_DATA && (index === 1 || index === 2))) && !this.stopTrade) {
+                await this.sleep(PREAMBLE_PACING_MS);
+                next = await this.exchangeByte(starter);
+                if (++preambleIterations > MAX_PREAMBLE_ITERATIONS) {
+                    this.log(`[ERROR] Section ${index}: Game Boy stuck in preamble`);
+                    this.stopTrade = true;
+                    throw new Error(`Section ${index} preamble timeout (stage 2)`);
+                }
+            }
         }
 
         // 'next' is the first byte (Byte 0) from the GB
@@ -3135,9 +3334,11 @@ export class GSCTrading extends TradingProtocol {
 
             // Loop for the rest
             for (let i = 0; i < length - 1; i++) {
-                // Send peer's byte (from our buffer) to GB
-
-                const sendByte = peerSectionData[i]; // Send Byte 0 now (for the NEXT exchange)
+                // Send peer's byte (from our buffer) to GB.
+                // 0xFE is the "no input" control code and never legal section
+                // data - Python prevent_no_input escapes it to 0xFF.
+                let sendByte = peerSectionData[i]; // Send Byte 0 now (for the NEXT exchange)
+                if (sendByte === this.NO_INPUT) sendByte = 0xFF;
                 const recvByte = await this.exchangeByte(sendByte);
                 receivedData[i + 1] = recvByte;
 
@@ -3154,10 +3355,16 @@ export class GSCTrading extends TradingProtocol {
             // gbData is what GB sent us.
             // peerData is what peer sent us via network (their GB's data).
 
-            // Store peer's party data for Section 1 to enable mail detection later
+            // Store peer sections: party for mail detection, patches/mail so the
+            // subsequent-trade cache holds the peer's REAL data (Python keeps the
+            // full other_pokemon, not a mirror of what we sent).
             if (index === 1 && peerData) {
                 this.peerPartyData = new Uint8Array(peerData);
                 if (this.verbose) this.log(`[DEBUG] Stored peer party data: ${this.peerPartyData.length} bytes`);
+            } else if (index === 2 && peerData) {
+                this.peerPatchData = new Uint8Array(peerData);
+            } else if (index === 3 && peerData) {
+                this.peerMailData = new Uint8Array(peerData);
             }
 
             const data = new Uint8Array(gbData);
@@ -3173,6 +3380,8 @@ export class GSCTrading extends TradingProtocol {
             let val = 0x00;
             if (dataToSend && i < dataToSend.length) {
                 val = dataToSend[i]; // Send byte i (starts at 0)
+                // Python prevent_no_input: 0xFE is never legal device-bound data
+                if (val === this.NO_INPUT) val = 0xFF;
             }
 
             const recvByte = await this.exchangeByte(val);
@@ -3182,7 +3391,9 @@ export class GSCTrading extends TradingProtocol {
 
         // This is critical - without it GB receives incomplete data!
         if (dataToSend && dataToSend.length >= length) {
-            await this.exchangeByte(dataToSend[length - 1]);
+            let lastVal = dataToSend[length - 1];
+            if (lastVal === this.NO_INPUT) lastVal = 0xFF;
+            await this.exchangeByte(lastVal);
         } else {
             await this.exchangeByte(0x00);
         }
@@ -3190,24 +3401,27 @@ export class GSCTrading extends TradingProtocol {
         return receivedData;
     }
 
-    async waitForMessage(type) {
-        return new Promise(resolve => {
-            // First check if data already exists in recvDict (from earlier message)
-            if (this.ws.recvDict && this.ws.recvDict[type]) {
-                const cachedData = this.ws.recvDict[type];
-                if (this.verbose) this.log(`[DEBUG] waitForMessage: Found cached ${type} data`);
-                resolve(cachedData);
-                return;
+    async waitForMessage(type, timeoutMs = 30000) {
+        const deadline = Date.now() + timeoutMs;
+        let lastGet = 0;
+        while (!this.stopTrade) {
+            const data = this.ws.recvDict[type];
+            if (data) {
+                delete this.ws.recvDict[type]; // consume-once, like Python's pop
+                return data;
             }
-
-            // Otherwise register listener for future message
-            const check = () => {
-                this.ws.registerListener(type, (data) => {
-                    resolve(data);
-                });
-            };
-            check();
-        });
+            if (Date.now() >= deadline) {
+                this.log(`[WARN] Timed out waiting for ${type}`);
+                return null;
+            }
+            // Re-request periodically in case the original GET or push was lost
+            if (Date.now() - lastGet > 500) {
+                this.ws.sendGetData(type);
+                lastGet = Date.now();
+            }
+            await this.sleep(100);
+        }
+        return null;
     }
 
     /**

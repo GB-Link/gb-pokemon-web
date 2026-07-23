@@ -178,8 +178,8 @@ export class SerialConnection {
 
     _awaitChannel(queue, waiters, timeoutMs) {
         if (queue.length > 0) return Promise.resolve(queue.shift());
-        return new Promise((resolve) => {
-            const waiter = { resolve, reject: resolve };
+        return new Promise((resolve, reject) => {
+            const waiter = { resolve, reject };
             waiters.push(waiter);
             if (timeoutMs > 0) {
                 setTimeout(() => {
@@ -212,14 +212,19 @@ export class SerialConnection {
         await this._writeFrame(CH_DATA, buf);
     }
 
-    async readByte() {
-        const frame = await this._awaitChannel(this._dataQueue, this._dataWaiters, 0);
+    async readByte(timeoutMs = 2000) {
+        const frame = await this._awaitChannel(this._dataQueue, this._dataWaiters, timeoutMs);
+        if (frame === null) {
+            const err = new Error(`Serial read timed out after ${timeoutMs}ms`);
+            err.isTimeout = true;
+            throw err;
+        }
         if (!frame || frame.length === 0) throw new Error('Read failed or empty');
         return frame[0];
     }
 
-    async readBytes(length) {
-        const frame = await this._awaitChannel(this._dataQueue, this._dataWaiters, 0);
+    async readBytes(length, timeoutMs = 2000) {
+        const frame = await this._awaitChannel(this._dataQueue, this._dataWaiters, timeoutMs);
         return frame || new Uint8Array(0);
     }
 
@@ -227,6 +232,15 @@ export class SerialConnection {
         if (!this.isConnected) throw new Error('Not connected');
         const frame = await this._awaitChannel(this._dataQueue, this._dataWaiters, timeoutMs);
         return frame || new Uint8Array(0);
+    }
+
+    /**
+     * Discard any stale frames queued from a previous session,
+     * mirroring the Python reference's pre-trade FIFO drain.
+     */
+    async drain() {
+        this._dataQueue = [];
+        this._statusQueue = [];
     }
 
     async setVoltage(mode) {

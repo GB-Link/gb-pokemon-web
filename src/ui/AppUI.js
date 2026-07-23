@@ -289,6 +289,10 @@ export class AppUI {
         entry.className = 'log-entry';
         entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
         this.elements.logContainer.appendChild(entry);
+        // Keep the on-page log bounded; long sync sessions log a lot
+        while (this.elements.logContainer.childElementCount > 500) {
+            this.elements.logContainer.removeChild(this.elements.logContainer.firstElementChild);
+        }
         this.elements.logContainer.scrollTop = this.elements.logContainer.scrollHeight;
         if (this.settings.get('verbose')) console.log(msg);
     }
@@ -354,6 +358,12 @@ export class AppUI {
     async startTrade() {
         if (this.isTradeActive) { await this.stopTrade(); return; }
 
+        // Wait out any previous trade loop still unwinding so two loops never
+        // interleave reads on the same adapter.
+        if (this.tradePromise) {
+            await Promise.race([this.tradePromise, new Promise(r => setTimeout(r, 3000))]);
+        }
+
         this.elements.btnStartTrade.disabled = true;
         const connected = await this.connectServer();
         if (!connected) { this.elements.btnStartTrade.disabled = false; return; }
@@ -361,6 +371,9 @@ export class AppUI {
         this.isTradeActive = true;
         this.elements.btnStartTrade.textContent = 'Stop Trade';
         this.elements.btnStartTrade.disabled = false;
+
+        // Per-packet websocket console dumps only when verbose is enabled
+        this.ws.debug = this.settings.get('verbose');
 
         const gen = this.selectedGen;
         const tradeType = this.selectedTradeType;
@@ -371,6 +384,17 @@ export class AppUI {
         const voltage = (gen === '3') ? '3v3' : '5v';
         this.log(`Setting voltage to ${voltage === '3v3' ? '3.3V' : '5V'} for Gen ${gen}...`);
         await this.usb.setVoltage(voltage);
+
+        // Old firmware: restore 1-byte GB timing (Python always sends this at
+        // session start); the adapter may still be in the 4-byte gen3/multiboot
+        // mode from a previous run. Its reply byte is swept by the drain below.
+        if (!this.usb.isNewFirmware && gen !== '3') {
+            await this.usb.setTimingConfig(1000, 1);
+        }
+
+        // Discard stale bytes left on the transport by a previous session
+        // (Python drains the FIFO before every trade).
+        if (this.usb.drain) await this.usb.drain();
 
         // New firmware: explicitly select GB Link mode for all trading generations
         if (this.usb.isNewFirmware) {
@@ -428,19 +452,41 @@ export class AppUI {
             });
         }
 
-        try {
-            await this.protocol.startTrade();
-        } catch (error) {
-            this.log(`Trade error: ${error}`);
-        } finally {
-            this.resetTradeButton();
-        }
+        // Surface a mid-trade server disconnect instead of letting the trade
+        // loops poll a dead connection forever.
+        const protocol = this.protocol;
+        this.ws.onDisconnect = () => {
+            if (!protocol.stopTrade) {
+                this.log('Server connection lost - stopping trade.');
+                protocol.stopTrade = true;
+            }
+        };
+
+        this.tradePromise = (async () => {
+            try {
+                await protocol.startTrade();
+            } catch (error) {
+                this.log(`Trade error: ${error}`);
+            } finally {
+                this.ws.onDisconnect = null;
+                if (protocol.stopVEC2Flood) protocol.stopVEC2Flood();
+                if (this.ws.isConnected) this.ws.disconnect();
+                if (this.protocol === protocol) this.resetTradeButton();
+            }
+        })();
+        await this.tradePromise;
     }
 
     async stopTrade() {
         this.log('Stopping trade...');
         if (this.protocol) this.protocol.stopTrade = true;
+        if (this.ws) this.ws.onDisconnect = null;
         if (this.ws && this.ws.isConnected) this.ws.disconnect();
+        // Wait (bounded) for the trade loop to actually unwind before the
+        // Start button can launch a new session against the same adapter.
+        if (this.tradePromise) {
+            await Promise.race([this.tradePromise, new Promise(r => setTimeout(r, 3000))]);
+        }
         this.resetTradeButton();
         this.log('Trade stopped. You can start a new trade.');
     }

@@ -39,6 +39,7 @@ export class TradingProtocol {
 
         let stateIndex = 0;
         let consecutiveNoData = 0;
+        let readFailures = 0;
 
         while (stateIndex < this.ENTER_ROOM_STATES[0].length && !this.stopTrade) {
             const nextByte = this.ENTER_ROOM_STATES[0][stateIndex];
@@ -50,8 +51,9 @@ export class TradingProtocol {
             let recv;
             try {
                 recv = await this.usb.readByte();
+                readFailures = 0;
             } catch (e) {
-                recv = this.NO_DATA;
+                recv = this.failedRead(e, ++readFailures);
             }
 
             // Check if response matches expected state
@@ -94,12 +96,39 @@ export class TradingProtocol {
         return true;
     }
 
-    async exchangeByte(byteToSend) {
-        await this.usb.writeByte(byteToSend);
-        try {
-            return await this.usb.readByte();
-        } catch (e) {
+    /**
+     * Handle a failed transport read inside a tolerant polling loop.
+     * A few timeouts are tolerated as NO_DATA (the retry loops are built for
+     * that), but a persistent silence or a hard transfer error aborts the
+     * trade loudly instead of forging 0x00 protocol bytes forever.
+     */
+    failedRead(error, failureCount) {
+        const MAX_CONSECUTIVE_FAILURES = 25;
+        if (error.isTimeout && failureCount < MAX_CONSECUTIVE_FAILURES) {
             return this.NO_DATA;
         }
+        this.log(`[ERROR] Game Boy link not responding: ${error.message}`);
+        this.stopTrade = true;
+        throw error;
+    }
+
+    async exchangeByte(byteToSend) {
+        await this.usb.writeByte(byteToSend);
+        let lastError = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+            if (this.stopTrade) return this.NO_DATA;
+            try {
+                // Retrying only the read is safe: a timed-out transfer stays
+                // pending in the transport and is consumed by the next read,
+                // so the write/read pairing is preserved.
+                return await this.usb.readByte();
+            } catch (e) {
+                lastError = e;
+                if (!e.isTimeout) break;
+            }
+        }
+        this.log(`[ERROR] USB exchange failed: ${lastError ? lastError.message : 'unknown error'}`);
+        this.stopTrade = true;
+        throw lastError || new Error('USB exchange failed');
     }
 }

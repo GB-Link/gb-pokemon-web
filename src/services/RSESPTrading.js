@@ -71,8 +71,23 @@ export class RSESPTrading extends TradingProtocol {
                 val & 0xFF
             ]);
             await this.usb.writeBytes(tx);
-            const rx = await this.usb.readBytesRaw(4, 2000);
-            if (!rx || rx.length < 4) return 0;
+            // Accumulate the 4 reply bytes across bounded read attempts; a dead
+            // link must abort loudly, not fabricate 0 words forever.
+            let rx = new Uint8Array(0);
+            for (let attempt = 0; attempt < 3 && rx.length < 4; attempt++) {
+                const chunk = await this.usb.readBytesRaw(4, 2000);
+                if (chunk.length > 0) {
+                    const merged = new Uint8Array(rx.length + chunk.length);
+                    merged.set(rx);
+                    merged.set(chunk, rx.length);
+                    rx = merged;
+                }
+            }
+            if (rx.length < 4) {
+                this.log("[ERROR] GBA link not responding (32-bit exchange timed out)");
+                this.stopTrade = true;
+                throw new Error("32-bit exchange read timeout");
+            }
             return ((rx[0] << 24) | (rx[1] << 16) | (rx[2] << 8) | rx[3]) >>> 0;
         };
     }
@@ -824,6 +839,14 @@ export class RSESPTrading extends TradingProtocol {
                     () => this.getWithCounter(this.pool_transfer)
                 );
                 if (this.stopTrade) return;
+
+                // Python aborts cleanly on the server's 1-byte pool-failure
+                // reply; retrying forever hangs the client.
+                if (monDataRaw && monDataRaw.length <= 1) {
+                    this.log("[ERROR] Pool unavailable (empty pool or server failure). Stopping.");
+                    this.stopTrade = true;
+                    return;
+                }
 
                 const receivedMon = RSESPUtils.singleMonFromData(this.checks, monDataRaw);
 

@@ -69,6 +69,54 @@ export class UsbConnection {
         this.cmdEndpointOut = 0;    // Command OUT        (new firmware only)
         this.isConnected = false;
         this.isNewFirmware = false;
+        this._pendingDataIn = null; // in-flight transferIn on the data endpoint
+    }
+
+    /**
+     * Single-reader transferIn on the data endpoint.
+     * A timed-out transfer is kept pending and consumed by the next read, so a
+     * late packet is delivered in order instead of being swallowed by an
+     * abandoned zombie transfer (which would shift every subsequent read).
+     * Always requests at least 64 bytes: transferIn length is a maximum, and
+     * requesting less than a full packet errors the transfer (babble).
+     */
+    async _dataTransferIn(length, timeoutMs) {
+        if (!this._pendingDataIn) {
+            this._pendingDataIn = this.device.transferIn(this.endpointIn, Math.max(length, 64));
+        }
+        const pending = this._pendingDataIn;
+
+        if (!(timeoutMs > 0)) {
+            try {
+                const result = await pending;
+                if (this._pendingDataIn === pending) this._pendingDataIn = null;
+                return result;
+            } catch (e) {
+                if (this._pendingDataIn === pending) this._pendingDataIn = null;
+                throw e;
+            }
+        }
+
+        let timer = null;
+        const timedOut = {};
+        try {
+            const winner = await Promise.race([
+                pending,
+                new Promise(resolve => { timer = setTimeout(() => resolve(timedOut), timeoutMs); })
+            ]);
+            if (winner === timedOut) {
+                const err = new Error(`USB read timed out after ${timeoutMs}ms`);
+                err.isTimeout = true;
+                throw err; // transfer stays in _pendingDataIn for the next read
+            }
+            if (this._pendingDataIn === pending) this._pendingDataIn = null;
+            return winner;
+        } catch (e) {
+            if (!e.isTimeout && this._pendingDataIn === pending) this._pendingDataIn = null;
+            throw e;
+        } finally {
+            if (timer !== null) clearTimeout(timer);
+        }
     }
 
     async connect() {
@@ -180,6 +228,7 @@ export class UsbConnection {
             this.device = null;
             this.isConnected = false;
             this.isNewFirmware = false;
+            this._pendingDataIn = null;
         }
     }
 
@@ -224,18 +273,18 @@ export class UsbConnection {
         await this.device.transferOut(this.endpointOut, data);
     }
 
-    async readByte() {
+    async readByte(timeoutMs = 2000) {
         if (!this.isConnected) throw new Error('Not connected');
-        const result = await this.device.transferIn(this.endpointIn, 64);
+        const result = await this._dataTransferIn(64, timeoutMs);
         if (result.status === 'ok' && result.data.byteLength > 0) {
             return result.data.getUint8(0);
         }
         throw new Error('Read failed or empty');
     }
 
-    async readBytes(length) {
+    async readBytes(length, timeoutMs = 2000) {
         if (!this.isConnected) throw new Error('Not connected');
-        const result = await this.device.transferIn(this.endpointIn, length);
+        const result = await this._dataTransferIn(length, timeoutMs);
         if (result.status === 'ok') {
             return new Uint8Array(result.data.buffer);
         }
@@ -245,17 +294,23 @@ export class UsbConnection {
     async readBytesRaw(length = 64, timeoutMs = 100) {
         if (!this.isConnected) throw new Error('Not connected');
         try {
-            const result = await Promise.race([
-                this.device.transferIn(this.endpointIn, length),
-                new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error('Read timeout')), timeoutMs)
-                )
-            ]);
+            const result = await this._dataTransferIn(length, timeoutMs);
             if (result.status === 'ok' && result.data && result.data.byteLength > 0) {
                 return new Uint8Array(result.data.buffer);
             }
-        } catch (e) { /* timeout */ }
+        } catch (e) { /* timeout or transfer error: caller treats empty as no-data */ }
         return new Uint8Array(0);
+    }
+
+    /**
+     * Discard any stale data queued on the device from a previous session,
+     * mirroring the Python reference's pre-trade FIFO drain.
+     */
+    async drain() {
+        for (let i = 0; i < 32; i++) {
+            const stale = await this.readBytesRaw(64, 50);
+            if (stale.length === 0) break;
+        }
     }
 
     // --- Voltage switching ---
@@ -271,12 +326,7 @@ export class UsbConnection {
             if (!fwVersionAtLeast(this.device, 1, 0, 6)) return false;
             const packet = mode === '5v' ? VSWITCH_5V_PACKET : VSWITCH_3V3_PACKET;
             await this.device.transferOut(this.endpointOut, packet);
-            try {
-                await Promise.race([
-                    this.device.transferIn(this.endpointIn, 64),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 500))
-                ]);
-            } catch (e) { /* ack timeout is non-fatal */ }
+            await this.readBytesRaw(64, 500); // ack; empty on timeout is non-fatal
         }
 
         console.log(`Voltage set to ${mode}`);
@@ -293,12 +343,7 @@ export class UsbConnection {
         } else {
             if (!fwVersionAtLeast(this.device, 1, 0, 6)) return false;
             await this.device.transferOut(this.endpointOut, buildLedPacket(r, g, b, on));
-            try {
-                await Promise.race([
-                    this.device.transferIn(this.endpointIn, 64),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 500))
-                ]);
-            } catch (e) { /* timeout */ }
+            await this.readBytesRaw(64, 500); // ack; empty on timeout is non-fatal
         }
         return true;
     }

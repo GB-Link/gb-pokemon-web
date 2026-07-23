@@ -138,14 +138,17 @@ export class RSESPUtils extends GSCUtils {
             }
         }
 
-        // Load experience lists
+        // Load experience lists: one row per level, 6 columns (one per growth
+        // group), transposed so exp_lists[group][level-1] = cumulative EXP.
         const expText = await this.fetchText(folder + "pokemon_exp.txt");
         if (expText) {
             const expLines = expText.split('\n').filter(l => l.trim());
-            this.exp_lists = [];
+            this.exp_lists = [[], [], [], [], [], []];
             for (const line of expLines) {
                 const vals = line.trim().split(/\s+/).map(Number);
-                this.exp_lists.push(vals);
+                for (let group = 0; group < 6; group++) {
+                    this.exp_lists[group].push(vals[group]);
+                }
             }
         }
 

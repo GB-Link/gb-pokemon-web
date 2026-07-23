@@ -268,6 +268,7 @@ export class RBYTrading extends GSCTrading {
         this.log("RBY: Entering room...");
         let stateIndex = 0;
         let retryCount = 0;
+        let readFailures = 0;
 
         while (stateIndex < this.ENTER_ROOM_STATES[0].length && !this.stopTrade) {
             const nextByte = this.ENTER_ROOM_STATES[0][stateIndex];
@@ -276,8 +277,9 @@ export class RBYTrading extends GSCTrading {
             let recv;
             try {
                 recv = await this.usb.readByte();
+                readFailures = 0;
             } catch (e) {
-                recv = this.NO_DATA;
+                recv = this.failedRead(e, ++readFailures);
             }
 
             const expectedStates = this.ENTER_ROOM_STATES[1][stateIndex];
@@ -319,6 +321,7 @@ export class RBYTrading extends GSCTrading {
         if (this.verbose) this.log(`RBY: START_TRADING_STATES = ${JSON.stringify(this.START_TRADING_STATES[0])}`);
         let stateIndex = 0;
         let retryCount = 0;
+        let readFailures = 0;
 
         while (stateIndex < this.START_TRADING_STATES[0].length && !this.stopTrade) {
             const nextByte = this.START_TRADING_STATES[0][stateIndex];
@@ -327,8 +330,9 @@ export class RBYTrading extends GSCTrading {
             let recv;
             try {
                 recv = await this.usb.readByte();
+                readFailures = 0;
             } catch (e) {
-                recv = this.NO_DATA;
+                recv = this.failedRead(e, ++readFailures);
             }
 
             const expectedStates = this.START_TRADING_STATES[1][stateIndex];
@@ -412,6 +416,11 @@ export class RBYTrading extends GSCTrading {
         if (this.verbose) this.log("Getting Random Data...");
         this.ws.sendGetData(this.MSG_RAN);
         const randomData = await this.waitForMessage(this.MSG_RAN);
+        if (!randomData) {
+            this.log("[ERROR] Server never sent random data. Aborting trade.");
+            this.stopTrade = true;
+            return;
+        }
         if (this.verbose) this.log(`Random Data received: ${randomData.length} bytes`);
 
         let tradeData;
@@ -440,9 +449,15 @@ export class RBYTrading extends GSCTrading {
             if (this.verbose) this.log("Getting Pool Data (POL1)...");
             this.ws.sendGetData(this.MSG_POL);
             const poolData = await this.waitForMessage(this.MSG_POL);
-            if (this.verbose) this.log(`Pool Data received: ${poolData.length} bytes`);
 
-            delete this.ws.recvDict[this.MSG_POL];
+            // Python kills the trade on the pool-failure reply
+            // ([counter, fail_value], length 2) instead of fabricating a mon.
+            if (!poolData || poolData.length <= 2) {
+                this.log("[ERROR] Pool unavailable (empty pool or server failure). Aborting trade.");
+                this.stopTrade = true;
+                return;
+            }
+            if (this.verbose) this.log(`Pool Data received: ${poolData.length} bytes`);
 
             // Create trading data from pool (no egg conversion in Gen 1)
             tradeData = RBYUtils.createTradingData(poolData.slice(1));
@@ -474,12 +489,21 @@ export class RBYTrading extends GSCTrading {
         // Apply patches
         RBYUtils.applyPatches(this.gbPartyData, gbPatchData, false);
 
-        // Cache peer sections for subsequent trades
+        // Cache peer sections for subsequent trades.
+        // The party is cached DECODED (peer's patches applied) so trade-menu
+        // edits (MVS1, updatePeerPartyAfterTrade) happen on real bytes; the
+        // wire patch section is regenerated at reuse time. Previously this
+        // cached the un-patched party plus OUR OWN patch section.
         if (!this.isBuffered && this.peerPartyData) {
+            const peerParty = new Uint8Array(this.peerPartyData);
+            if (this.peerPatchData) {
+                RBYUtils.applyPatches(peerParty, this.peerPatchData, false);
+            }
+            this.cachedPeerPartyDecoded = !!this.peerPatchData;
             this.bufferedOtherData = [
                 randomData,
-                this.peerPartyData,
-                tradeData.section2
+                peerParty,
+                this.peerPatchData ? new Uint8Array(this.peerPatchData) : tradeData.section2
                 // No mail section
             ];
             if (this.verbose) this.log("[DEBUG] Cached peer sections for subsequent trades (RBY - no mail)");
@@ -500,6 +524,7 @@ export class RBYTrading extends GSCTrading {
             if (peerSections) {
                 this.peerPartyData = peerSections[1];
                 this.bufferedOtherData = peerSections;
+                this.cachedPeerPartyDecoded = false; // FLL data is raw wire form
                 this.log("Received peer's FLL1 data!");
             }
         }
@@ -560,9 +585,18 @@ export class RBYTrading extends GSCTrading {
         }
 
         this.log("Using cached peer party data for trade...");
+        let sendParty = this.bufferedOtherData[1];
+        let sendPatches = this.bufferedOtherData[2];
+        if (this.cachedPeerPartyDecoded) {
+            // Re-escape 0xFE bytes and rebuild the patch section from the
+            // decoded cached party (createPatchesData edits the clone in place).
+            sendParty = new Uint8Array(this.bufferedOtherData[1]);
+            sendPatches = new Uint8Array(this.bufferedOtherData[2]);
+            RBYUtils.createPatchesData(sendParty, sendPatches, false);
+        }
         const tradeData = {
-            section1: this.bufferedOtherData[1],
-            section2: this.bufferedOtherData[2]
+            section1: sendParty,
+            section2: sendPatches
             // RBY has NO section3 (mail)
         };
 
@@ -610,26 +644,28 @@ export class RBYTrading extends GSCTrading {
         const lastIndex = partySize - 1;
         if (this.verbose) this.log(`[DEBUG] RBY sendMVS1: Party size=${partySize}, lastIndex=${lastIndex}`);
 
-        // Extract moves and PP from last Pokemon's core data (RBY offsets)
+        // Extract species, moves and PP from last Pokemon's core data (RBY offsets)
         const coreStart = RBYUtils.trading_pokemon_pos + (lastIndex * RBYUtils.trading_pokemon_length);
 
-        const moveData = new Uint8Array(8);
+        // Python RBY send_move_data_only payload: [species, moves*4, pp*4]
+        const moveData = new Uint8Array(9);
+        moveData[0] = this.gbPartyData[coreStart];
         // RBY: Moves are at offset 8 in core data
         for (let j = 0; j < 4; j++) {
-            moveData[j] = this.gbPartyData[coreStart + RBYUtils.moves_pos + j];
+            moveData[1 + j] = this.gbPartyData[coreStart + RBYUtils.moves_pos + j];
         }
         // RBY: PP is at offset 0x1D (29) in core data
         for (let j = 0; j < 4; j++) {
-            moveData[4 + j] = this.gbPartyData[coreStart + RBYUtils.pps_pos + j];
+            moveData[5 + j] = this.gbPartyData[coreStart + RBYUtils.pps_pos + j];
         }
 
-        // Create MVS1 payload: [counter] + [8 bytes move/PP data]
-        const mvsPayload = new Uint8Array(9);
+        // Create MVS1 payload: [counter] + [species] + [8 bytes move/PP data]
+        const mvsPayload = new Uint8Array(10);
         mvsPayload[0] = this.ownCounterId;
         mvsPayload.set(moveData, 1);
 
         this.ws.sendData(this.MSG_MVS, mvsPayload);
-        this.log(`Sent ${this.MSG_MVS} (Counter: ${this.ownCounterId}): moves=[${moveData.slice(0, 4).join(',')}] pp=[${moveData.slice(4, 8).join(',')}]`);
+        this.log(`Sent ${this.MSG_MVS} (Counter: ${this.ownCounterId}): species=${moveData[0]} moves=[${moveData.slice(1, 5).join(',')}] pp=[${moveData.slice(5, 9).join(',')}]`);
 
         this.ownCounterId = (this.ownCounterId + 1) % 256;
     }
@@ -649,7 +685,7 @@ export class RBYTrading extends GSCTrading {
         const maxRetries = 500;
         for (let i = 0; i < maxRetries && !this.stopTrade; i++) {
             const mvsData = this.ws.recvDict[this.MSG_MVS];
-            if (mvsData && mvsData.length >= 9) {
+            if (mvsData && mvsData.length >= 10) {
                 const counter = mvsData[0];
 
                 if (this.peerCounterId === null) {
@@ -666,8 +702,10 @@ export class RBYTrading extends GSCTrading {
                     }
                 }
 
-                const moveData = mvsData.slice(1, 9);
-                this.log(`Received ${this.MSG_MVS} (Counter: ${counter}): moves=[${moveData.slice(0, 4).join(',')}] pp=[${moveData.slice(4, 8).join(',')}]`);
+                // Python RBY payload: [counter, species, moves*4, pp*4]
+                const species = mvsData[1];
+                const moveData = mvsData.slice(2, 10);
+                this.log(`Received ${this.MSG_MVS} (Counter: ${counter}): species=${species} moves=[${moveData.slice(0, 4).join(',')}] pp=[${moveData.slice(4, 8).join(',')}]`);
 
                 this.peerCounterId = (this.peerCounterId + 1) % 256;
 
@@ -686,6 +724,14 @@ export class RBYTrading extends GSCTrading {
                     // RBY: PP at offset 0x1D
                     for (let j = 0; j < 4; j++) {
                         peerParty[coreStart + RBYUtils.pps_pos + j] = moveData[4 + j];
+                    }
+                    // Trade evolution: update species in the struct and the
+                    // party list (Python evolution_procedure; the receiving
+                    // game recalculates stats itself).
+                    if (species !== 0 && species !== peerParty[coreStart]) {
+                        peerParty[coreStart] = species;
+                        peerParty[RBYUtils.trading_party_info_pos + 1 + lastIndex] = species;
+                        this.log(`Peer's last Pokemon evolved (species ${species})`);
                     }
 
                     this.log(`Updated peer's last Pokemon (slot ${lastIndex}) with new moves/PP`);
@@ -802,6 +848,12 @@ export class RBYTrading extends GSCTrading {
         const POSSIBLE_INDEXES = this.POSSIBLE_INDEXES;
 
         while (!this.stopTrade) {
+            // Drop last round's outgoing menu messages so a peer GET can never
+            // be answered with a stale CHC1/ACP1/SUC1 from a previous round.
+            delete this.ws.sendDict[this.MSG_CHC];
+            delete this.ws.sendDict[this.MSG_ACP];
+            delete this.ws.sendDict[this.MSG_SUC];
+
             if (this.verbose) this.log("[DEBUG] RBY: Waiting for Pokemon selection...");
             const choice = await this.waitForChoice(this.NO_INPUT, POSSIBLE_INDEXES, 10);
 
@@ -809,29 +861,32 @@ export class RBYTrading extends GSCTrading {
 
             this.log(`RBY: GB selected: 0x${choice.toString(16)} (Index: ${choice - this.FIRST_TRADE_INDEX})`);
 
-            // Check for STOP_TRADE
-            if (choice === this.STOP_TRADE) {
+            // Check for STOP_TRADE (pool: Python's to_server autoclose - end at once.
+            // Link: Python sends the stop to the peer and awaits their answer.)
+            if (choice === this.STOP_TRADE && !this.isLinkTrade) {
                 this.log("RBY: Trade cancelled by player");
                 await this.endTrade(this.STOP_TRADE);
 
                 // For pool trades: reconnect WebSocket to get fresh Pokemon from server
-                if (!this.isLinkTrade) {
-                    this.bufferedOtherData = null;
-                    delete this.ws.recvDict[this.MSG_POL];
+                this.bufferedOtherData = null;
+                delete this.ws.recvDict[this.MSG_POL];
 
-                    // Reconnect WebSocket to get new Pokemon from pool
-                    this.log("RBY Pool: Reconnecting to get fresh Pokemon...");
-                    const serverUrl = this.ws.url; // Store current URL before disconnect
-                    this.ws.disconnect();
-                    await this.sleep(500); // Brief delay for clean disconnect
-                    await this.ws.connect(serverUrl);
-                    this.log("RBY Pool: Reconnected! Will get new Pokemon on re-entry");
-                }
+                // Reconnect WebSocket to get new Pokemon from pool
+                this.log("RBY Pool: Reconnecting to get fresh Pokemon...");
+                const serverUrl = this.ws.url; // Store current URL before disconnect
+                this.ws.disconnect();
+                await this.sleep(500); // Brief delay for clean disconnect
+                await this.ws.connect(serverUrl);
+                this.log("RBY Pool: Reconnected! Will get new Pokemon on re-entry");
                 break;
             }
 
-            // Send CHC1 with Pokemon data
-            const pokemonData = this.extractSinglePokemon(choice);
+            // Send CHC1: full Pokemon data for a choice, the short
+            // [counter, stop] form when our player cancelled (Python
+            // send_chosen_mon handles both the same way).
+            const pokemonData = (choice === this.STOP_TRADE)
+                ? new Uint8Array([choice])
+                : this.extractSinglePokemon(choice);
             const chc1Payload = new Uint8Array(1 + pokemonData.length);
             chc1Payload[0] = this.tradeCounter;
             chc1Payload.set(pokemonData, 1);
@@ -851,20 +906,37 @@ export class RBYTrading extends GSCTrading {
                 delete this.ws.recvDict[this.MSG_CHC];
                 this.log("Link: Waiting for peer's Pokemon selection (CHC1)...");
                 this.ws.sendGetData(this.MSG_CHC);
-                const peerChoiceData = await this.waitForMessage(this.MSG_CHC, 15000);
+                // The peer is a human picking a mon - wait generously (Python
+                // waits forever); never fabricate a choice on their behalf.
+                const peerChoiceData = await this.waitForMessage(this.MSG_CHC, 600000);
                 if (peerChoiceData && peerChoiceData.length >= 2) {
                     // CHC1 format: Counter (1) + Choice (1) + Pokemon data
                     serverChoice = peerChoiceData[1];
                     this.log(`Link: Peer selected: 0x${serverChoice.toString(16)} (Index: ${serverChoice - this.FIRST_TRADE_INDEX})`);
                 } else {
-                    this.log("Link: WARNING - No peer choice received, using first Pokemon");
-                    serverChoice = this.FIRST_TRADE_INDEX;
+                    this.log("[ERROR] Link: No peer choice received - ending trade");
+                    await this.endTrade(this.STOP_TRADE);
+                    break;
                 }
             }
 
+            // One-sided cancel handling (Python do_trade): both stopped ->
+            // close the menu; one stopped -> back to selection so the other
+            // player can re-pick. A peer stop must never reach the GB as a
+            // Pokemon choice.
+            if (choice === this.STOP_TRADE || serverChoice === this.STOP_TRADE) {
+                if (choice === this.STOP_TRADE && serverChoice === this.STOP_TRADE) {
+                    this.log("RBY: Both players cancelled - ending trade");
+                    await this.endTrade(this.STOP_TRADE);
+                    break;
+                }
+                this.log("RBY: One player cancelled - returning to selection");
+                continue;
+            }
+
             let next = await this.exchangeByte(serverChoice);
-            next = await this.waitForNoData(next, serverChoice, 0);
-            next = await this.waitForNoInput(next);
+            next = await this.waitForNoData(next, serverChoice, 20);
+            if (next === this.NO_DATA) next = await this.waitForNoInput(next);
 
             // Wait for GB accept/decline
             const gbAccept = await this.waitForAcceptDecline(next);
@@ -881,12 +953,22 @@ export class RBYTrading extends GSCTrading {
             // IMPORTANT: Clear any stale ACP1 from previous trade first!
             delete this.ws.recvDict[this.MSG_ACP];
             this.ws.sendGetData(this.MSG_ACP);
-            const serverAcceptData = await this.waitForMessage(this.MSG_ACP, 5000);
+            // Link peers are humans confirming in-game - wait generously
+            const serverAcceptData = await this.waitForMessage(this.MSG_ACP, this.isLinkTrade ? 120000 : 5000);
 
             let serverAccept;
             if (!this.isLinkTrade) {
-                // Pool: server always accepts
-                serverAccept = this.ACCEPT_TRADE;
+                // Pool: use the server's REAL decision. The server declines when
+                // the offered mon fails its sanity checks; forcing an accept here
+                // made the server commit garbage into the shared pool (Python
+                // forwards the server's reply to the GB).
+                if (serverAcceptData && serverAcceptData.length >= 2) {
+                    serverAccept = serverAcceptData[1];
+                    this.log(`Pool: Server decision: ${serverAccept === this.ACCEPT_TRADE ? 'ACCEPT' : 'DECLINE'}`);
+                } else {
+                    this.log("Pool: WARNING - No server accept received, declining");
+                    serverAccept = this.DECLINE_TRADE;
+                }
             } else {
                 // Link: parse peer's actual response from ACP1
                 if (serverAcceptData && serverAcceptData.length >= 2) {
@@ -899,8 +981,8 @@ export class RBYTrading extends GSCTrading {
             }
 
             next = await this.exchangeByte(serverAccept);
-            next = await this.waitForNoData(next, serverAccept, 0);
-            next = await this.waitForNoInput(next);
+            next = await this.waitForNoData(next, serverAccept, 20);
+            if (next === this.NO_DATA) next = await this.waitForNoInput(next);
 
             if (gbAccept === this.ACCEPT_TRADE && serverAccept === this.ACCEPT_TRADE) {
                 this.log("RBY: Trade accepted by both parties!");
@@ -911,8 +993,8 @@ export class RBYTrading extends GSCTrading {
 
                 if (!this.stopTrade) {
                     next = await this.exchangeByte(successByte);
-                    next = await this.waitForNoData(next, successByte, 0);
-                    next = await this.waitForNoInput(next);
+                    next = await this.waitForNoData(next, successByte, 20);
+                    if (next === this.NO_DATA) next = await this.waitForNoInput(next);
 
                     // Clear buffers
                     let stableCount = 0;
@@ -934,19 +1016,16 @@ export class RBYTrading extends GSCTrading {
                     // Clear stale SUC1 before waiting for new one
                     delete this.ws.recvDict[this.MSG_SUC];
                     this.ws.sendGetData(this.MSG_SUC);
-                    await this.waitForMessage(this.MSG_SUC, 5000);
+                    await this.waitForMessage(this.MSG_SUC, this.isLinkTrade ? 60000 : 5000);
 
                     this.log("RBY: Trade round completed successfully!");
 
-                    // For pool trades: send traded Pokemon to pool and get new one
+                    // For pool trades: get a new Pokemon from the pool.
+                    // (The mon we gave the server already went out inside CHC1;
+                    // an extra SNG1 send here is outside the server's protocol
+                    // and its size is not in the SNG1 whitelist.)
                     if (!this.isLinkTrade) {
-                        // 1. Send the Pokemon the player traded to us to the pool via SNG1
-                        const tradedPokemonIndex = choice - this.FIRST_TRADE_INDEX;
-                        const tradedPokemonData = this.extractSinglePokemon(choice);
-                        this.log(`RBY Pool: Sending traded Pokemon (slot ${tradedPokemonIndex}) to pool via ${this.MSG_SNG}...`);
-                        this.ws.sendData(this.MSG_SNG, tradedPokemonData);
-
-                        // 2. Get new Pokemon from pool via POL1 (will be used in next tradeStartingSequence)
+                        // Get new Pokemon from pool via POL1 (will be used in next tradeStartingSequence)
                         this.log(`RBY Pool: Requesting new Pokemon from pool via ${this.MSG_POL}...`);
                         this.ws.sendGetData(this.MSG_POL);
                         const newPoolData = await this.waitForMessage(this.MSG_POL, 5000);

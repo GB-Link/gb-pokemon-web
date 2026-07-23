@@ -214,9 +214,11 @@ export class GSCUtils {
         // Party Count = 1
         data.section1[this.trading_party_info_pos] = 1;
 
-        // Species ID
-        // monData[0] is species
-        data.section1[this.trading_party_info_pos + 1] = monData[0];
+        // Species ID for the party list; the trailing egg flag (Python
+        // single_mon_to_data) makes it show as an EGG while the mon struct
+        // keeps the real species.
+        const isEgg = poolData.length > 0x75 && poolData[0x75] === this.EGG_VALUE;
+        data.section1[this.trading_party_info_pos + 1] = isEgg ? this.EGG_ID : monData[0];
         data.section1[this.trading_party_info_pos + 2] = 0xFF; // End of list
 
         // Final Byte
@@ -503,12 +505,16 @@ export class GSCUtils {
     }
 
     static prepareExpLists(text) {
-        // Each line is a comma-separated list of 100 EXP values for one growth group
+        // pokemon_exp.txt: one row per level (100 rows), 6 whitespace-separated
+        // columns (one per growth group). Transposed like Python's
+        // prepare_exp_lists so expLists[group][level-1] = cumulative EXP.
         const lines = text.trim().split('\n');
-        const ret = [];
-        for (const line of lines) {
-            const values = line.split(',').map(v => parseInt(v.trim(), 10));
-            ret.push(values);
+        const ret = [[], [], [], [], [], []];
+        for (let level = 0; level < lines.length; level++) {
+            const columns = lines[level].trim().split(/\s+/);
+            for (let group = 0; group < 6; group++) {
+                ret[group].push(parseInt(columns[group], 10));
+            }
         }
         return ret;
     }

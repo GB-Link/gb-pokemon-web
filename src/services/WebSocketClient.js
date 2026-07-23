@@ -7,6 +7,8 @@ export class WebSocketClient {
         this.listeners = {}; // Map of type -> callback
         this.sendDict = {}; // Data ready to be sent when requested
         this.recvDict = {}; // Store most recent received data by type
+        this.debug = false; // Gate per-packet console dumps (hot loops send ~100 pkts/sec)
+        this.onDisconnect = null; // Called on unexpected close (not user-initiated)
 
         // Constants from HighLevelListener.py
         this.REQ_INFO_POSITION = 0;
@@ -17,28 +19,41 @@ export class WebSocketClient {
     }
 
     connect(url) {
+        // Drop any previous session completely so stale sockets, cached
+        // dicts and listeners can never leak into the new trade.
+        if (this.ws) {
+            this.disconnect();
+        }
+        this.sendDict = {};
+        this.recvDict = {};
+        this.listeners = {};
+
         return new Promise((resolve, reject) => {
             this.url = url; // Store URL for potential reconnection
-            this.ws = new WebSocket(url);
+            const socket = new WebSocket(url);
+            this.ws = socket;
 
-            this.ws.onopen = () => {
+            socket.onopen = () => {
+                if (this.ws !== socket) return; // superseded by a newer connect
                 this.isConnected = true;
                 console.log("WebSocket connected");
                 resolve();
             };
 
-            this.ws.onclose = (event) => {
+            socket.onclose = (event) => {
+                if (this.ws !== socket) return; // stale socket from a previous session
                 console.log(`WebSocket disconnected. Code: ${event.code}, Reason: ${event.reason}`);
                 this.isConnected = false;
-                console.log("WebSocket disconnected");
+                if (this.onDisconnect) this.onDisconnect(event);
             };
 
-            this.ws.onerror = (error) => {
+            socket.onerror = (error) => {
+                if (this.ws !== socket) return;
                 console.error("WebSocket error:", error);
                 reject(error);
             };
 
-            this.ws.onmessage = async (event) => {
+            socket.onmessage = async (event) => {
                 let data;
                 if (event.data instanceof Blob) {
                     data = new Uint8Array(await event.data.arrayBuffer());
@@ -46,6 +61,7 @@ export class WebSocketClient {
                     // Assuming binary data for this protocol
                     data = new Uint8Array(event.data);
                 }
+                if (this.ws !== socket) return;
                 this.processReceivedData(data);
             };
         });
@@ -56,12 +72,17 @@ export class WebSocketClient {
      */
     disconnect() {
         if (this.ws) {
-            this.ws.close();
-            this.ws = null;
+            const socket = this.ws;
+            this.ws = null; // detach first so onclose is ignored as user-initiated
+            socket.onclose = null;
+            socket.onerror = null;
+            socket.onmessage = null;
+            try { socket.close(); } catch (_) {}
             this.isConnected = false;
             // Clear cached data
             this.sendDict = {};
             this.recvDict = {};
+            this.listeners = {};
             console.log("WebSocket manually disconnected");
         }
     }
@@ -99,15 +120,18 @@ export class WebSocketClient {
         // HighLevelListener.send_data sends it immediately.
         const packet = this.prepareSendData(type, data);
         if (this.isConnected) {
-            console.log(`WS Send: ${type}`, packet);
+            if (this.debug) console.log(`WS Send: ${type}`, packet);
             this.ws.send(packet);
+        } else {
+            console.warn(`WS Send ${type} dropped: not connected`);
+            if (this.onDisconnect) this.onDisconnect(null);
         }
     }
 
     sendGetData(type) {
         const packet = this.prepareGetData(type);
         if (this.isConnected) {
-            console.log(`WS Send GET: ${type}`, packet);
+            if (this.debug) console.log(`WS Send GET: ${type}`, packet);
             this.ws.send(packet);
         }
     }
@@ -117,13 +141,13 @@ export class WebSocketClient {
      */
     sendRaw(data) {
         if (this.isConnected) {
-            console.log(`WS Send Raw:`, data);
+            if (this.debug) console.log(`WS Send Raw:`, data);
             this.ws.send(data);
         }
     }
 
     processReceivedData(data) {
-        console.log("WS Recv Raw:", data);
+        if (this.debug) console.log("WS Recv Raw:", data);
         if (data.length < this.LEN_POSITION) return;
 
         const decoder = new TextDecoder();
@@ -131,7 +155,7 @@ export class WebSocketClient {
         const reqKind = reqInfo[0];
         const reqType = reqInfo.substring(1, 5);
 
-        console.log(`WS Recv: Kind=${reqKind}, Type=${reqType}`);
+        if (this.debug) console.log(`WS Recv: Kind=${reqKind}, Type=${reqType}`);
 
         if (reqKind === this.SEND_REQUEST) {
             // "S" + TYPE + LEN + DATA
@@ -149,7 +173,7 @@ export class WebSocketClient {
                 // Notify listener
                 if (this.listeners[reqType]) {
                     this.listeners[reqType](payload);
-                } else {
+                } else if (this.debug) {
                     console.warn(`No listener for ${reqType}`);
                 }
             }
