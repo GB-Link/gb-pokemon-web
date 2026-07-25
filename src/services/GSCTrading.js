@@ -2616,12 +2616,13 @@ export class GSCTrading extends TradingProtocol {
         if (!recvBuf) return ret;
 
         // Mirrors Python prepare_single_entry_new: an entry for a LATER section
-        // means the peer moved on (treat as our completion); only entries for
-        // THIS section are consumable; earlier-section stragglers are ignored.
+        // means the peer moved on (treat as our completion) - INCLUDING their
+        // next-section sync marker, which is how a Python peer (which never
+        // sends an explicit pos=length marker) signals section completion.
+        // Current-section sync markers fall out via the pos <= length check.
         for (let i = 0; i < this.TOTAL_SEND_BUF_NEW_BYTES; i++) {
             const entry = recvBuf[i];
             if (!entry) continue;
-            if (entry[0] === 0xFFFF) continue; // sync marker, not data
             if (entry[2] > index) {
                 ret[length] = 0;
             } else if (entry[2] === index && entry[0] <= length) {
