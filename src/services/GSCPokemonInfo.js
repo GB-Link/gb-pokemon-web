@@ -8,8 +8,8 @@
  * - Mail attachment
  * - Data comparison for trade verification
  */
-import { GSCUtils } from './GSCUtils.js?v=88';
-import { GSCChecks } from './GSCChecks.js?v=88';
+import { GSCUtils } from './GSCUtils.js?v=89';
+import { GSCChecks } from './GSCChecks.js?v=89';
 
 export class GSCPokemonInfo {
     // Data structure lengths

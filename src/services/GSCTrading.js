@@ -1,8 +1,8 @@
 
-import { TradingProtocol } from './TradingProtocol.js?v=88';
-import { GSCUtils } from './GSCUtils.js?v=88';
-import { GSCChecks } from './GSCChecks.js?v=88';
-import { GSCJPMailConverter } from './GSCJPMailConverter.js?v=88';
+import { TradingProtocol } from './TradingProtocol.js?v=89';
+import { GSCUtils } from './GSCUtils.js?v=89';
+import { GSCChecks } from './GSCChecks.js?v=89';
+import { GSCJPMailConverter } from './GSCJPMailConverter.js?v=89';
 
 export class GSCTrading extends TradingProtocol {
     constructor(usb, ws, logger, tradeType = 'pool', isBuffered = false, doSanityChecks = true, options = {}) {
@@ -3331,9 +3331,9 @@ export class GSCTrading extends TradingProtocol {
         }
 
         // 3. Preamble Stage 2: Sync with Device (Wait for Data Start)
-        // NO_DATA (0x00) means "no fresh byte from the GB", never real data,
-        // for the party and patch sections (their first byte is never 0) —
-        // accepting it here previously desynced the two players at section 2.
+        // NO_DATA (0x00) is never a legal first byte for the party section,
+        // but the patch section legitimately starts with 7 zero header bytes —
+        // skipping them shifts the section and breaks applyPatches.
         let next = starter;
         preambleIterations = 0;
         if (index === 0 && !useSyncForSection) {
@@ -3346,7 +3346,7 @@ export class GSCTrading extends TradingProtocol {
             }
         } else {
             while ((next === starter ||
-                    (next === this.NO_DATA && (index === 1 || index === 2))) && !this.stopTrade) {
+                    (next === this.NO_DATA && index === 1)) && !this.stopTrade) {
                 await this.sleep(PREAMBLE_PACING_MS);
                 next = await this.exchangeByte(starter);
                 if (++preambleIterations > MAX_PREAMBLE_ITERATIONS) {

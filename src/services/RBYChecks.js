@@ -2,8 +2,8 @@
  * RBYChecks - Data validation and sanitization for RBY (Gen 1) trading.
  * Extends GSCChecks with RBY-specific overrides, matching Python reference's RBYChecks.
  */
-import { GSCChecks } from './GSCChecks.js?v=88';
-import { RBYUtils } from './RBYUtils.js?v=88';
+import { GSCChecks } from './GSCChecks.js?v=89';
+import { RBYUtils } from './RBYUtils.js?v=89';
 
 export class RBYChecks extends GSCChecks {
     // RBY-specific constants (different from GSC)

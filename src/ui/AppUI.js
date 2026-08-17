@@ -1,12 +1,12 @@
 
-import { UsbConnection, CMD, MODE } from '../services/UsbConnection.js?v=88';
-import { SerialConnection } from '../services/SerialConnection.js?v=88';
-import { WebSocketClient } from '../services/WebSocketClient.js?v=88';
-import { RBYTrading } from '../services/RBYTrading.js?v=88';
-import { GSCTrading } from '../services/GSCTrading.js?v=88';
-import { SettingsManager } from '../services/SettingsManager.js?v=88';
-import { multiboot } from '../services/Multiboot.js?v=88';
-import { RSESPTrading } from '../services/RSESPTrading.js?v=88';
+import { UsbConnection, CMD, MODE } from '../services/UsbConnection.js?v=89';
+import { SerialConnection } from '../services/SerialConnection.js?v=89';
+import { WebSocketClient } from '../services/WebSocketClient.js?v=89';
+import { RBYTrading } from '../services/RBYTrading.js?v=89';
+import { GSCTrading } from '../services/GSCTrading.js?v=89';
+import { SettingsManager } from '../services/SettingsManager.js?v=89';
+import { multiboot } from '../services/Multiboot.js?v=89';
+import { RSESPTrading } from '../services/RSESPTrading.js?v=89';
 
 export class AppUI {
     constructor() {

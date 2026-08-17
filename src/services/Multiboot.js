@@ -4,7 +4,7 @@
  * Uses batched SPI transfers for dramatically faster ROM loading.
  */
 
-import { MODE } from './UsbConnection.js?v=88';
+import { MODE } from './UsbConnection.js?v=89';
 
 function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
