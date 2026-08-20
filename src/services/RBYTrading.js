@@ -370,6 +370,19 @@ export class RBYTrading extends GSCTrading {
         return false;
     }
 
+    // Trade-evolution species (internal ids): Kadabra, Machoke, Graveler, Haunter
+    static TRADE_EVO_SPECIES = new Set([38, 39, 41, 147]);
+
+    /**
+     * Python requires_input: special mon or trade evolution; an everstone
+     * value in the catch-rate byte blocks evolution (Time Capsule rule).
+     */
+    monRequiresInput(species, item) {
+        if (this.SPECIAL_MONS.has(species)) return true;
+        if (!RBYTrading.TRADE_EVO_SPECIES.has(species)) return false;
+        return item !== 0x70;
+    }
+
     /**
      * Override waitForAcceptDecline to use RBY byte values
      * RBY: ACCEPT=0x62, DECLINE=0x61 (vs GSC: 0x72, 0x71)
@@ -401,7 +414,7 @@ export class RBYTrading extends GSCTrading {
 
         // Check for peer version in link trade
         if (this.isLinkTrade) {
-            await this.sleep(2000);
+            await this.sleep(5000); // Python waits 5s for the peer version (attempt_receive)
             const peerVersion = this.ws.recvDict[this.MSG_VEC];
             if (peerVersion && peerVersion.length > 0) {
                 this.useNewProtocol = true;
@@ -890,11 +903,13 @@ export class RBYTrading extends GSCTrading {
             const pokemonData = (choice === this.STOP_TRADE)
                 ? new Uint8Array([choice])
                 : this.extractSinglePokemon(choice);
+            // All counter-carrying messages share the single ownCounterId
+            // chain; get_with_counter peers drop off-chain counters.
             const chc1Payload = new Uint8Array(1 + pokemonData.length);
-            chc1Payload[0] = this.tradeCounter;
+            chc1Payload[0] = this.ownCounterId;
             chc1Payload.set(pokemonData, 1);
             this.ws.sendData(this.MSG_CHC, chc1Payload);
-            this.tradeCounter = (this.tradeCounter + 1) & 0xFF;
+            this.ownCounterId = (this.ownCounterId + 1) % 256;
             this.log(`Sent CHC1 with Pokemon data: ${chc1Payload.length} bytes`);
 
             // Get peer's/server's Pokemon selection
@@ -904,15 +919,11 @@ export class RBYTrading extends GSCTrading {
                 serverChoice = this.FIRST_TRADE_INDEX;
                 this.log(`Pool: Server auto-selected: 0x${serverChoice.toString(16)}`);
             } else {
-                // Link trade: GET CHC1 from peer to receive their actual selection
-                // IMPORTANT: Clear any stale CHC1 from previous trade first!
-                delete this.ws.recvDict[this.MSG_CHC];
+                // Peer's selection, counter-filtered; human-timescale wait
+                // (Python waits forever)
                 this.log("Link: Waiting for peer's Pokemon selection (CHC1)...");
                 this.onStatus?.("Waiting for the other player's choice…");
-                this.ws.sendGetData(this.MSG_CHC);
-                // The peer is a human picking a mon - wait generously (Python
-                // waits forever); never fabricate a choice on their behalf.
-                const peerChoiceData = await this.waitForMessage(this.MSG_CHC, 600000);
+                const peerChoiceData = await this.getCounterMessage(this.MSG_CHC, { timeoutMs: 600000 });
                 if (peerChoiceData && peerChoiceData.length >= 2) {
                     // CHC1 format: Counter (1) + Choice (1) + Pokemon data
                     serverChoice = peerChoiceData[1];
@@ -950,16 +961,18 @@ export class RBYTrading extends GSCTrading {
             this.log(`RBY: GB decision: ${gbAccept === this.ACCEPT_TRADE ? 'ACCEPT' : 'DECLINE'}`);
 
             // Send ACP1
-            const acp1Counter = this.tradeCounter;
-            this.ws.sendData(this.MSG_ACP, new Uint8Array([acp1Counter, gbAccept]));
-            this.tradeCounter = (this.tradeCounter + 1) & 0xFF;
+            this.ws.sendData(this.MSG_ACP, new Uint8Array([this.ownCounterId, gbAccept]));
+            this.ownCounterId = (this.ownCounterId + 1) % 256;
 
-            // Get server/peer accept response
-            // IMPORTANT: Clear any stale ACP1 from previous trade first!
-            delete this.ws.recvDict[this.MSG_ACP];
-            this.ws.sendGetData(this.MSG_ACP);
-            // Link peers are humans confirming in-game - wait generously
-            const serverAcceptData = await this.waitForMessage(this.MSG_ACP, this.isLinkTrade ? 120000 : 5000);
+            // Peer accept is counter-filtered; pool server replies are always fresh
+            let serverAcceptData;
+            if (this.isLinkTrade) {
+                serverAcceptData = await this.getCounterMessage(this.MSG_ACP, { timeoutMs: 120000 });
+            } else {
+                delete this.ws.recvDict[this.MSG_ACP];
+                this.ws.sendGetData(this.MSG_ACP);
+                serverAcceptData = await this.waitForMessage(this.MSG_ACP, 5000);
+            }
 
             let serverAccept;
             if (!this.isLinkTrade) {
@@ -993,6 +1006,38 @@ export class RBYTrading extends GSCTrading {
                 this.log("RBY: Trade accepted by both parties!");
                 this.onStatus?.('Trading…');
 
+                // ASK1 (need_data) exchange, link only. Chain order must be
+                // CHC, ACP, ASK, SUC (Python do_trade).
+                if (this.isLinkTrade) {
+                    const NEED_DATA_VALUE = 0x72;
+                    const NOT_NEED_DATA_VALUE = 0x43;
+                    const ourIdx = choice - this.FIRST_TRADE_INDEX;
+                    const ourMonBase = RBYUtils.trading_pokemon_pos + ourIdx * RBYUtils.trading_pokemon_length;
+                    const ourSpecies = this.gbPartyData?.[ourMonBase] ?? 0;
+                    const ourItem = this.gbPartyData?.[ourMonBase + RBYUtils.item_pos] ?? 0;
+                    // ASK value = requires_input(mon we gave) (Python other_blank)
+                    const weGaveNeedsInput = this.monRequiresInput(ourSpecies, ourItem);
+                    const askVal = weGaveNeedsInput ? NEED_DATA_VALUE : NOT_NEED_DATA_VALUE;
+                    this.ws.sendData(this.MSG_ASK, new Uint8Array([this.ownCounterId, askVal]));
+                    this.ownCounterId = (this.ownCounterId + 1) % 256;
+                    this.log(`Sent ${this.MSG_ASK} (need_data): 0x${askVal.toString(16)}`);
+
+                    const peerAsk = await this.getCounterMessage(this.MSG_ASK, { timeoutMs: 120000 });
+                    if (peerAsk && peerAsk.length >= 2) {
+                        this.ownBlankTrade = (peerAsk[1] === NEED_DATA_VALUE);
+                        this.log(`Peer ${this.MSG_ASK}: 0x${peerAsk[1].toString(16)} -> ownBlankTrade=${this.ownBlankTrade}`);
+                    } else {
+                        // Fallback guess: requires_input(mon we received)
+                        const peerParty = this.bufferedOtherData?.[1];
+                        const peerIdx = serverChoice - this.FIRST_TRADE_INDEX;
+                        const peerMonBase = RBYUtils.trading_pokemon_pos + peerIdx * RBYUtils.trading_pokemon_length;
+                        this.ownBlankTrade = this.monRequiresInput(
+                            peerParty?.[peerMonBase] ?? 0, peerParty?.[peerMonBase + RBYUtils.item_pos] ?? 0);
+                        this.log(`[WARN] No ${this.MSG_ASK} from peer, guessed ownBlankTrade=${this.ownBlankTrade}`);
+                    }
+                    this.otherBlankTrade = weGaveNeedsInput;
+                }
+
                 // Wait for success byte
                 const successByte = await this.waitForChoice(next, this.SUCCESS_VALUES, 10);
                 this.log(`RBY: Trade success! Final byte: 0x${successByte.toString(16)}`);
@@ -1015,14 +1060,17 @@ export class RBYTrading extends GSCTrading {
                     }
 
                     // Send SUC1
-                    const suc1Counter = this.tradeCounter;
-                    this.ws.sendData(this.MSG_SUC, new Uint8Array([suc1Counter, 0x61]));
-                    this.tradeCounter = (this.tradeCounter + 1) & 0xFF;
+                    this.ws.sendData(this.MSG_SUC, new Uint8Array([this.ownCounterId, 0x61]));
+                    this.ownCounterId = (this.ownCounterId + 1) % 256;
 
-                    // Clear stale SUC1 before waiting for new one
-                    delete this.ws.recvDict[this.MSG_SUC];
-                    this.ws.sendGetData(this.MSG_SUC);
-                    await this.waitForMessage(this.MSG_SUC, this.isLinkTrade ? 60000 : 5000);
+                    // Wait for the peer/server success (counter-filtered on link)
+                    if (this.isLinkTrade) {
+                        await this.getCounterMessage(this.MSG_SUC, { timeoutMs: 60000 });
+                    } else {
+                        delete this.ws.recvDict[this.MSG_SUC];
+                        this.ws.sendGetData(this.MSG_SUC);
+                        await this.waitForMessage(this.MSG_SUC, 5000);
+                    }
 
                     this.log("RBY: Trade round completed successfully!");
                     this.onStatus?.('Trade complete!', 'success');

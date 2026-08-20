@@ -66,7 +66,8 @@ export class GSCTrading extends TradingProtocol {
         // Special mons that may learn new moves - matches special_mons set
         // These Pokemon require input check even if they didn't evolve
         // GSC species IDs: Lugia=0xF9, Moltres=0x49, Zapdos=0x4A, Articuno=0x4B
-        this.SPECIAL_MONS = new Set([0xF9, 0x49, 0x4A, 0x4B]);
+        // Python special_mons: Lugia, Moltres, Zapdos, Articuno (Gen 2 dex numbers)
+        this.SPECIAL_MONS = new Set([249, 146, 145, 144]);
 
         // GSC Party Data Structure offsets (from gsc_trading_data_utils.py)
         this.TRADING_POKEMON_LENGTH = 0x30;      // 48 bytes per Pokemon core data
@@ -110,7 +111,9 @@ export class GSCTrading extends TradingProtocol {
 
         // Mail item IDs (0x9E-0xA8 are mail items in GSC)
         // From ids_mail.bin: mail items are in range 0x9E to 0xA8
-        this.MAIL_ITEM_IDS = new Set([0x9E, 0x9F, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8]);
+        // Mail item ids from useful_data/gsc/ids_mail.bin; must match the
+        // Python client or the mail-section sync decision diverges.
+        this.MAIL_ITEM_IDS = new Set([0x9E, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD]);
 
         // Offset of held item in Pokemon data (within the 48-byte Pokemon structure)
         // From gsc_trading_data_utils.py: item_pos = 1 (second byte)
@@ -143,10 +146,8 @@ export class GSCTrading extends TradingProtocol {
             return false;
         }
 
-        // Get party size (first byte of party data after header)
-        // Party structure: [count byte, species list (7 bytes), ...]
-        // Pokemon data starts at TRADING_POKEMON_POS (0x15 = 21)
-        const partySize = Math.min(partyData[0] || 0, 6); // Max 6 Pokemon
+        // Party count is at 0x0B; byte 0 is a trainer-name character
+        const partySize = Math.min(partyData[0x0B] || 0, 6);
 
         for (let i = 0; i < partySize; i++) {
             // Calculate offset for this Pokemon's held item
@@ -351,7 +352,7 @@ export class GSCTrading extends TradingProtocol {
         // For link trades, check if peer sent their VEC2 - if so, use NEW protocol
         if (this.isLinkTrade) {
             // Wait briefly for peer's VEC2
-            await this.sleep(2000);
+            await this.sleep(5000); // Python waits 5s for the peer version (attempt_receive)
             const peerVersion = this.ws.recvDict["VEC2"];
             if (peerVersion && peerVersion.length > 0) {
                 this.useNewProtocol = true;
@@ -1331,6 +1332,53 @@ export class GSCTrading extends TradingProtocol {
      * Validates counter to reject stale messages (mirrors get_with_counter).
      * Returns [choice, pokemonData, isValid] or null.
      */
+    /**
+     * Python requires_input: special mon or trade evolution (item rules
+     * handled by GSCUtils.isEvolving).
+     */
+    monRequiresInput(species, item) {
+        if (this.SPECIAL_MONS.has(species)) return true;
+        return GSCUtils.isEvolving(species, item);
+    }
+
+    /**
+     * Counter-filtered receive for [counter, ...] peer messages. Peers answer
+     * GETs with their last sent message, so counters behind peerCounterId are
+     * dropped as stale; accepted counters forward-sync it (get_with_counter).
+     */
+    async getCounterMessage(tag, { keepAlive = true, timeoutMs = 600000 } = {}) {
+        const deadline = Date.now() + timeoutMs;
+        let lastGet = 0;
+        while (!this.stopTrade && Date.now() < deadline) {
+            const data = this.ws.recvDict[tag];
+            if (data && data.length > 0) {
+                const counter = data[0];
+                if (this.peerCounterId !== null && this.peerCounterId !== undefined) {
+                    const diff = (counter - this.peerCounterId + 256) % 256;
+                    if (diff > 128) {
+                        if (this.verbose) this.log(`[DEBUG] Dropping stale ${tag}: counter=${counter}, expected>=${this.peerCounterId}`);
+                        delete this.ws.recvDict[tag];
+                        await this.sleep(50);
+                        continue;
+                    }
+                    this.peerCounterId = counter;
+                } else {
+                    this.peerCounterId = counter;
+                }
+                this.peerCounterId = (this.peerCounterId + 1) % 256;
+                delete this.ws.recvDict[tag];
+                return data;
+            }
+            if (Date.now() - lastGet > 500) {
+                this.ws.sendGetData(tag);
+                lastGet = Date.now();
+            }
+            if (keepAlive) await this.exchangeByte(this.NO_INPUT);
+            await this.sleep(50);
+        }
+        return null;
+    }
+
     async getChosenMon() {
         const FIRST_TRADE_INDEX = 0x70;
         const STOP_TRADE = 0x7F;
@@ -1653,9 +1701,12 @@ export class GSCTrading extends TradingProtocol {
                 const ourTradedSpecies = this.gbPartyData ?
                     this.gbPartyData[this.TRADING_POKEMON_POS + (ourIndex * this.TRADING_POKEMON_LENGTH)] : 0;
 
-                // Check if traded Pokemon are special mons (require MVS2)
-                const peerNeedsMVS2 = this.SPECIAL_MONS.has(peerTradedSpecies); // mon WE received
-                const weNeedMVS2FromPeer = this.SPECIAL_MONS.has(ourTradedSpecies); // mon PEER received
+                // requires_input for both traded mons; held items gate gen2 evolutions
+                const peerTradedItem = peerPokemon && peerPokemon.length > 1 ? peerPokemon[1] : 0;
+                const ourTradedItem = this.gbPartyData ?
+                    this.gbPartyData[this.TRADING_POKEMON_POS + (ourIndex * this.TRADING_POKEMON_LENGTH) + 1] : 0;
+                const peerNeedsMVS2 = this.monRequiresInput(peerTradedSpecies, peerTradedItem); // mon WE received
+                const weNeedMVS2FromPeer = this.monRequiresInput(ourTradedSpecies, ourTradedItem); // mon PEER received
 
                 if (this.verbose) this.log(`[DEBUG] Traded species: we received=0x${peerTradedSpecies.toString(16)}, peer received=0x${ourTradedSpecies.toString(16)}`);
 
@@ -1666,18 +1717,14 @@ export class GSCTrading extends TradingProtocol {
                 this.ownCounterId = (this.ownCounterId + 1) % 256;
                 this.log(`Sent ${this.MSG_ASK} (need_data): 0x${ourNeedDataValue.toString(16)}`);
 
-                // Get peer's ASK response (they tell us if we need to send them MVS)
-                await this.sleep(300);
-                this.ws.sendGetData(this.MSG_ASK);
-                const peerAsk2 = await this.waitForMessage(this.MSG_ASK);
+                // Peer's need_data: whether we must send MVS2 next round (counter-filtered)
+                const peerAsk2 = await this.getCounterMessage(this.MSG_ASK, { timeoutMs: 120000 });
                 if (peerAsk2 && peerAsk2.length >= 2) {
-                    const peerCounter = peerAsk2[0];
                     const peerValue = peerAsk2[1];
-                    this.log(`Peer ASK2: counter=${peerCounter}, value=0x${peerValue.toString(16)}`);
+                    this.log(`Peer ASK2: counter=${peerAsk2[0]}, value=0x${peerValue.toString(16)}`);
 
                     // peerValue tells us if WE need to send THEM MVS2
                     this.ownBlankTrade = (peerValue === NEED_DATA_VALUE);
-                    this.peerCounterId = (peerCounter + 1) % 256;
                 } else {
                     this.log(`[WARN] Failed to receive ${this.MSG_ASK}, using calculated value`);
                     this.ownBlankTrade = peerNeedsMVS2;
@@ -3111,54 +3158,12 @@ export class GSCTrading extends TradingProtocol {
                 sendBufData[slotIndex] = [length, lastByte, index, false, 0];
             }
 
-            this.log(`Sync Section ${index}: Sending completion marker (pos=${length})...`);
-
-            // Wait for completion marker while sending ours
-            let peerCompleted = false;
-            let attempts = 0;
-            const MAX_HANDSHAKE_ATTEMPTS = 200; // 200 * 50ms = 10 seconds max
-            let lastMarkerSend = 0;
-
-            while (!peerCompleted && !this.stopTrade && attempts < MAX_HANDSHAKE_ATTEMPTS) {
-                // Send our completion marker (throttled; peer pulls via GET too)
-                if (Date.now() - lastMarkerSend > 300) {
-                    const finalSendBuf = this.createDataPacket(sendBufData, index);
-                    this.sendTradeData(finalSendBuf);
-                    lastMarkerSend = Date.now();
-                }
-
-                // Check for completion marker
-                const recvBuf = await this.getTradeData();
-                if (recvBuf) {
-                    // Extract peer's positions - check if any position >= length
-                    const peerPositions = this.useNewProtocol
-                        ? this.getSwappableBytesNew(recvBuf, length + 1, index)  // Allow length as valid
-                        : this.getSwappableBytesOld(recvBuf, length + 1, index); // Allow length as valid
-
-                    // Check if peer sent completion (position >= length)
-                    for (const posStr in peerPositions) {
-                        const pos = parseInt(posStr);
-                        if (pos >= length) {
-                            peerCompleted = true;
-                            this.log(`Sync Section ${index}: Received peer completion marker (pos=${pos})`);
-                            break;
-                        }
-                    }
-                }
-
-                if (!peerCompleted) {
-                    await this.sleep(50);
-                    attempts++;
-                }
-            }
-
-            if (!peerCompleted && !this.stopTrade) {
-                // Advancing without the peer previously let one side reach the
-                // trade menu alone; abort both sides cleanly instead.
-                this.log(`[ERROR] Sync Section ${index}: Other player never confirmed completion. Aborting trade.`);
-                this.stopTrade = true;
-                throw new Error(`Section ${index} completion handshake timeout`);
-            }
+            // Send the marker without waiting for confirmation: the protocol
+            // has no completion handshake. The next section's synchSynchSection
+            // is the only barrier, and none follows the last synced section.
+            const finalSendBuf = this.createDataPacket(sendBufData, index);
+            this.sendTradeData(finalSendBuf);
+            this.log(`Sync Section ${index}: Sent completion marker (pos=${length})`);
         }
 
         this.log(`Sync Exchange Section ${index}: Complete`);
