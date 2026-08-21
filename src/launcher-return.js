@@ -1,15 +1,20 @@
 // launcher-return.js
-// Shows a small "Return to launcher" button when this client was opened from the
-// GB Link launcher (URL contains ?from=gblink-launcher). Self-contained: no deps,
-// no external CSS. Safe to load from any framework — it appends a fixed-position
-// element to <body> after load.
+// Shows a small "Return to launcher" button when this client was opened from a
+// GB Link launcher surface (?from=gblink-launcher for the USB launcher,
+// ?from=gblink-bgb for the BGB desktop app's gblink.io/bgb page). Self-contained:
+// no deps, no external CSS. Safe to load from any framework — it appends a
+// fixed-position element to <body> after load.
 (function () {
-  var LAUNCHER_URL = 'https://launcher.gblink.io';
   var FROM_KEY = 'from';
-  var FROM_VALUE = 'gblink-launcher';
+  var TARGETS = {
+    'gblink-launcher': 'https://launcher.gblink.io',
+    'gblink-bgb': 'https://gblink.io/bgb'
+  };
+  var LAUNCHER_URL;
 
   try {
-    if (new URLSearchParams(window.location.search).get(FROM_KEY) !== FROM_VALUE) return;
+    LAUNCHER_URL = TARGETS[new URLSearchParams(window.location.search).get(FROM_KEY)];
+    if (!LAUNCHER_URL) return;
   } catch (e) {
     return;
   }

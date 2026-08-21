@@ -53,6 +53,13 @@
                     <button id="btn-start-trade" disabled>Start Trade</button>
                 </div>
             </div>
+            <div class="form-group" id="bgb-options" style="display: none; align-items: center; gap: 10px; flex-wrap: wrap;">
+                <label for="bgb-target">BGB address:</label>
+                <input type="text" id="bgb-target" value="127.0.0.1:8765" size="16">
+                <label style="display: inline-flex; align-items: center; gap: 4px;">
+                    <input type="checkbox" id="bgb-listen"> BGB connects to me (use BGB Link &gt; Connect)
+                </label>
+            </div>
         </div>
 
         <!-- Negotiation Popup -->
@@ -199,7 +206,7 @@
             </div>
         </div>
     </div>
-    <script type="module" src="src/main.js?v=89"></script>
+    <script type="module" src="src/main.js?v=90"></script>
     <script src="src/launcher-return.js"></script>
 </body>
 

@@ -1,8 +1,8 @@
 
-import { TradingProtocol } from './TradingProtocol.js?v=89';
-import { GSCUtils } from './GSCUtils.js?v=89';
-import { GSCChecks } from './GSCChecks.js?v=89';
-import { GSCJPMailConverter } from './GSCJPMailConverter.js?v=89';
+import { TradingProtocol } from './TradingProtocol.js?v=90';
+import { GSCUtils } from './GSCUtils.js?v=90';
+import { GSCChecks } from './GSCChecks.js?v=90';
+import { GSCJPMailConverter } from './GSCJPMailConverter.js?v=90';
 
 export class GSCTrading extends TradingProtocol {
     constructor(usb, ws, logger, tradeType = 'pool', isBuffered = false, doSanityChecks = true, options = {}) {
@@ -56,6 +56,24 @@ export class GSCTrading extends TradingProtocol {
         this.SPECIAL_SECTIONS_LEN = [0xA, 0x1BC, 0xC5, 0x181]; // Random, Pokemon, Patches, Mail (Matches ref impl)
         this.SECTION_NAMES = ['Random data', 'Party data', 'Patch data', 'Mail data']; // UI progress labels
         this.SPECIAL_SECTIONS_PREAMBLE_LEN = [7, 6, 3, 5]; // Random, Pokemon, Patches, Mail (Matches ref impl)
+
+        // JP text fillers (Python GSCTradingJP.fillers): INT position -> [len, value].
+        // JP games have 6-byte names; the in-memory/network image stays
+        // INT-normalized while filler positions are skipped on the wire to the
+        // device. Empty maps for INT games.
+        this.SECTION_FILLERS = [{}, {}, {}, {}, {}];
+        // Extra no-data device exchanges after a buffered section read
+        // (Python drop_bytes_checks[2]).
+        this.EXTRA_SECTION_DROPS = [0, 0, 0, 0, 0];
+        if (this.isJapanese) {
+            const fillers = {};
+            fillers[6] = [5, 0x50]; // trainer name
+            for (let i = 0; i < 12; i++) { // 6 OT names + 6 nicknames
+                fillers[0x13B + i * 0x0B] = [5, 0x50];
+            }
+            this.SECTION_FILLERS[1] = fillers;
+            this.EXTRA_SECTION_DROPS[1] = 4;
+        }
 
         // drop_bytes_checks: [[start_positions], [bad_bytes]]
         // If a byte at position >= start_position equals bad_byte, ref impl flags transfer as failed
@@ -521,7 +539,7 @@ export class GSCTrading extends TradingProtocol {
             mailDataToSend = await this.convertMailData(tradeData.section3, true);
         }
 
-        const gbMailData = await this.readSection(3, mailDataToSend, skipMailSync);
+        const gbMailData = await this.readSection(this.getMailSectionId(), mailDataToSend, skipMailSync);
         if (this.verbose) this.log(`[DEBUG] Section 3 (Mail) read complete. Got ${gbMailData?.length || 0} bytes`);
 
         // === JAPANESE MAIL CONVERSION (AFTER receiving from device) ===
@@ -1333,6 +1351,34 @@ export class GSCTrading extends TradingProtocol {
      * Returns [choice, pokemonData, isValid] or null.
      */
     /**
+     * Device mail section index: 3 for INT, 4 for JP (Python
+     * GSCTradingJP.get_mail_section_id; JP mail is 0x11D bytes on the device
+     * while the network/in-memory image stays the INT 0x181 section 3).
+     */
+    getMailSectionId() {
+        return this.isJapanese ? 4 : 3;
+    }
+
+    getSectionLength(index) {
+        if (this.isJapanese && index === 4) {
+            return this.jpMailConverter?.mailConversionTableJp?.length ?? 0x11D;
+        }
+        return this.SPECIAL_SECTIONS_LEN[index];
+    }
+
+    getSectionStarter(index) {
+        if (this.isJapanese && index === 4) return 0x20;
+        return [0xFD, 0xFD, 0xFD, 0x20][index] ?? 0xFD;
+    }
+
+    // Python special_sections_sync: controls the stage-1 preamble byte
+    // (NO_INPUT for synced sections, the starter itself for mail).
+    isSectionStage1Synced(index) {
+        if (this.isJapanese && index === 4) return false;
+        return [true, true, true, false][index] ?? true;
+    }
+
+    /**
      * Python requires_input: special mon or trade evolution (item rules
      * handled by GSCUtils.isEvolving).
      */
@@ -2021,6 +2067,9 @@ export class GSCTrading extends TradingProtocol {
             await this.jpMailConverter.load();
         }
 
+        // The in-place patch decode below must not mutate cached sections
+        data = new Uint8Array(data);
+
         if (toDevice) {
             // Sending TO Japanese Game Boy:
             // 1. Apply International mail patches
@@ -2534,7 +2583,11 @@ export class GSCTrading extends TradingProtocol {
             if (this.verbose) this.log("[MAIL] Neither party has mail. Skipping Section 3 sync.");
         }
 
-        await this.readSection(3, tradeData.section3, skipSync);
+        let mailToFeed = tradeData.section3;
+        if (this.isJapanese) {
+            mailToFeed = await this.convertMailData(tradeData.section3, true);
+        }
+        await this.readSection(this.getMailSectionId(), mailToFeed, skipSync);
 
         // === Step 2: ALWAYS SEND MVS2 AFTER section exchange ===
         // ref impl line 1460: self.comms.send_move_data_only() (unconditional)
@@ -2727,12 +2780,19 @@ export class GSCTrading extends TradingProtocol {
         const ret = {};
         if (!recvBuf) return ret;
 
+        // A packet for a LATER section means the peer completed this one.
+        // Checked before the slot loop: the peer's next-section sync marker
+        // has both slots 0xFFFF and would otherwise be invisible, which lost
+        // a race against the peer's single data-packet completion window.
+        const packetIndex = recvBuf[2] ? recvBuf[2][0] : 0;
+        if (packetIndex >= index + 1) {
+            ret[length] = 0;
+            return ret;
+        }
+
         for (let i = 0; i < 2; i++) {
             if (recvBuf[i] && recvBuf[i][0] !== 0xFFFF) {
-                // prepare_single_entry logic:
-                // 1. If recv_buf[2] >= (index + 1), treat as completion (ret[length] = 0)
-                // 2. If byte_num <= length, accept the byte
-                const recvIndex = recvBuf[2] ? recvBuf[2][0] : 0;
+                const recvIndex = packetIndex;
 
                 if (recvIndex >= (index + 1)) {
                     // Peer has moved to next section - treat as completion
@@ -2743,6 +2803,14 @@ export class GSCTrading extends TradingProtocol {
                     // ref impl uses byte_num <= length (includes completion position)
                     if (pos <= length) {
                         ret[pos] = val;
+                    } else if (pos > 0xFE00 && pos <= 0xFEFF) {
+                        // JP filler run: count in the position field, range
+                        // anchored one past the other slot's entry
+                        const count = pos - 0xFE00;
+                        const anchor = recvBuf[(i + 1) & 1] ? recvBuf[(i + 1) & 1][0] : 0xFFFF;
+                        for (let j = 0; j < count; j++) {
+                            ret[anchor + 1 + j] = val;
+                        }
                     }
                 }
             }
@@ -2947,6 +3015,10 @@ export class GSCTrading extends TradingProtocol {
         // Our data from GB + Peer's data to send to GB
         const buf = [firstByte];      // Our GB's data
         const otherBuf = [];          // Peer's data to send to our GB
+        // JP filler ranges (INT positions): synthesized locally on both
+        // streams, never exchanged with the device (Python
+        // synch_exchange_section_new + fillers)
+        const fillers = this.SECTION_FILLERS?.[index] || {};
 
         // Send buffer data: track positions (8 for NEW, 2 for OLD protocol)
         // Entry format: [pos, val, extra_val, is_filler, extra_bits]
@@ -2989,6 +3061,13 @@ export class GSCTrading extends TradingProtocol {
                         // NO_INPUT control code to 0xFF before it can reach the GB
                         otherBuf.push(raw === 0xFE ? 0xFF : raw);
                         posRecv++;
+                        const fill = fillers[posRecv];
+                        if (fill) {
+                            for (let j = 0; j < fill[0] && posRecv + j < length; j++) {
+                                otherBuf.push(fill[1]);
+                            }
+                            posRecv = Math.min(posRecv + fill[0], length);
+                        }
                     }
                 }
 
@@ -3000,7 +3079,12 @@ export class GSCTrading extends TradingProtocol {
                 } else if (posRecv > iFeed) {
                     byteToConsole = otherBuf[iFeed];
                     if (posRecv > (iFeed + SAFETY_AMOUNT)) schedule = true;
-                    if (schedule) iFeed++;
+                    if (schedule) {
+                        iFeed++;
+                        // Filler bytes exist in otherBuf but are never fed to the device
+                        const fill = fillers[iFeed];
+                        if (fill) iFeed += fill[0];
+                    }
                 }
 
                 if (schedule) {
@@ -3026,6 +3110,17 @@ export class GSCTrading extends TradingProtocol {
                     sendBufData[sendIndex % this.TOTAL_SEND_BUF_NEW_BYTES] = [posSend, nextByte, index, false, 0];
                     sendIndex++;
                     posSend++;
+                    {
+                        // Filler ranges are not read from the device: emit one
+                        // is_filler entry for the peer and advance past them
+                        const fill = fillers[posSend];
+                        if (fill) {
+                            sendBufData[sendIndex % this.TOTAL_SEND_BUF_NEW_BYTES] = [posSend, fill[1], index, true, fill[0]];
+                            sendIndex++;
+                            for (let j = 0; j < fill[0]; j++) buf.push(fill[1]);
+                            posSend += fill[0];
+                        }
+                    }
                     this.sendTradeData(this.createDataPacket(sendBufData, index));
                     lastTransfer = Date.now();
                     this.onProgress?.(index, posSend, length);
@@ -3109,15 +3204,38 @@ export class GSCTrading extends TradingProtocol {
                     // to 0xFF before feeding the GB.
                     const cleanByte = (peerByte === 0xFE) ? 0xFF : peerByte;
 
+                    const nextI = i + 1;
+                    const fill = fillers[nextI];
+                    if (fill) {
+                        // JP filler range: no device exchange; advertise the run
+                        // as a 0xFE00+len entry (anchored by the other slot)
+                        sendBufData[nextI & 1] = [0xFE00 + fill[0], fill[1], index, false, 0];
+                        for (let j = 0; j < fill[0]; j++) {
+                            buf.push(fill[1]);
+                            otherBuf.push(fill[1]);
+                        }
+                        i += fill[0];
+                        continue;
+                    }
+
                     // Exchange with GB: send peer's byte, receive our next byte
                     const nextByte = await this.exchangeByte(cleanByte);
                     this.onProgress?.(index, i + 1, length);
 
-                    const nextI = i + 1;
-
                     // Update our buffers
                     otherBuf.push(cleanByte);
                     buf.push(nextByte);  // Store original from GB
+
+                    // Python remove_filler: a consumed filler entry collapses to
+                    // the current position before the fresh entry is written
+                    for (let s = 0; s < 2; s++) {
+                        const pos = sendBufData[s] ? sendBufData[s][0] : 0;
+                        if (pos > 0xFE00 && pos <= 0xFEFF) {
+                            const val = sendBufData[s][1];
+                            sendBufData[0] = [i, val, index, false, 0];
+                            sendBufData[1] = [i, val, index, false, 0];
+                        }
+                    }
 
                     // OLD protocol slot: (nextI) & 1 matches ref impl send_buf[(next_i)&1]
                     sendBufData[nextI & 1] = [nextI, nextByte, index, false, 0];
@@ -3147,23 +3265,60 @@ export class GSCTrading extends TradingProtocol {
             // Use the last byte we got from GB as the value for the completion marker
             const lastByte = buf.length > 0 ? buf[buf.length - 1] : 0;
 
-            // For OLD protocol: Set BOTH slots to the completion marker
-            // This ensures ref impl definitely sees position 'length' regardless of which slot it reads
-            if (!this.useNewProtocol) {
-                sendBufData[0] = [length, lastByte, index, false, 0];
-                sendBufData[1] = [length, lastByte, index, false, 0];
-            } else {
+            // OLD protocol: the data loop's last iteration already left the
+            // slots holding [length-1] and [length] - exactly Python's state at
+            // its completion wait. Overwriting both slots with [length] evicts
+            // the [length-1] entry a lockstep 3.x peer may still need.
+            if (this.useNewProtocol) {
                 const bufferSize = this.TOTAL_SEND_BUF_NEW_BYTES;
                 const slotIndex = sendIndex % bufferSize;
                 sendBufData[slotIndex] = [length, lastByte, index, false, 0];
             }
 
-            // Send the marker without waiting for confirmation: the protocol
-            // has no completion handshake. The next section's synchSynchSection
-            // is the only barrier, and none follows the last synced section.
-            const finalSendBuf = this.createDataPacket(sendBufData, index);
-            this.sendTradeData(finalSendBuf);
-            this.log(`Sync Section ${index}: Sent completion marker (pos=${length})`);
+            if (this.useNewProtocol) {
+                // NEW protocol: send the marker without waiting. Python 4.x has
+                // no completion handshake (the next section's sync marker is the
+                // only barrier, and none follows the last synced section).
+                const finalSendBuf = this.createDataPacket(sendBufData, index);
+                this.sendTradeData(finalSendBuf);
+                this.log(`Sync Section ${index}: Sent completion marker (pos=${length})`);
+            } else {
+                // OLD protocol: a 3.x peer completes a section only from a
+                // packet carrying our pos=length entry (its parser drops pure
+                // 0xFFFF marker slots). Python sits at its own completion wait
+                // answering GETs with that packet, so mirror it: keep the
+                // completion entry live and resend until the peer shows
+                // pos>=length, then move on.
+                const finalSendBuf = this.createDataPacket(sendBufData, index);
+                this.sendTradeData(finalSendBuf);
+                this.log(`Sync Section ${index}: Sent completion marker (pos=${length}), waiting for peer...`);
+                let peerCompleted = false;
+                let lastMarkerSend = Date.now();
+                const deadline = Date.now() + 60000;
+                while (!peerCompleted && !this.stopTrade) {
+                    if (Date.now() > deadline) {
+                        this.log(`[ERROR] Sync Section ${index}: Other player never confirmed completion. Aborting trade.`);
+                        this.stopTrade = true;
+                        throw new Error(`Section ${index} completion handshake timeout`);
+                    }
+                    if (Date.now() - lastMarkerSend > 300) {
+                        this.sendTradeData(finalSendBuf);
+                        lastMarkerSend = Date.now();
+                    }
+                    const recvBuf = await this.getTradeData();
+                    if (recvBuf) {
+                        const peerPositions = this.getSwappableBytesOld(recvBuf, length + 1, index);
+                        for (const posStr in peerPositions) {
+                            if (parseInt(posStr) >= length) {
+                                peerCompleted = true;
+                                this.log(`Sync Section ${index}: Peer completion confirmed`);
+                                break;
+                            }
+                        }
+                    }
+                    if (!peerCompleted) await this.sleep(50);
+                }
+            }
         }
 
         this.log(`Sync Exchange Section ${index}: Complete`);
@@ -3254,7 +3409,8 @@ export class GSCTrading extends TradingProtocol {
     // ==================== READ SECTION (HANDLES BOTH MODES) ====================
 
     async readSection(index, dataToSend, skipSync = false) {
-        const length = this.SPECIAL_SECTIONS_LEN[index];
+        const length = this.getSectionLength(index);
+        const sectionFillers = this.SECTION_FILLERS?.[index] || {};
 
         // ==================== 1. BUFFERED MODE (ASYNC) ====================
         // Only use buffered mode if we HAVE the peer's data (Pass 2)
@@ -3293,8 +3449,7 @@ export class GSCTrading extends TradingProtocol {
         // ==================== SHARED PREAMBLE (Wake up GB) ====================
 
         // next_section = 0xFD, mail_next_section = 0x20
-        const SECTION_STARTERS = [0xFD, 0xFD, 0xFD, 0x20]; // Sections 0-2 use 0xFD, Section 3 (Mail) uses 0x20
-        const starter = SECTION_STARTERS[index] ?? 0xFD;
+        const starter = this.getSectionStarter(index);
 
         // 1. Network Sync (Handshake) - SYNC MODE ONLY
         // Must happen BEFORE Preamble to match ref impl
@@ -3314,10 +3469,9 @@ export class GSCTrading extends TradingProtocol {
         // the GB through its preamble before we are watching for it. Exchanges
         // are paced to the GB's per-frame cadence; hammering faster reads
         // NO_DATA between frames.
-        const SPECIAL_SECTIONS_SYNC = [true, true, true, false];
         const PREAMBLE_PACING_MS = 20;
         const MAX_PREAMBLE_ITERATIONS = 1500; // * 20ms = 30s per stage
-        const stage1Byte = SPECIAL_SECTIONS_SYNC[index] ? this.NO_INPUT : starter;
+        const stage1Byte = this.isSectionStage1Synced(index) ? this.NO_INPUT : starter;
         // Python initializes recv = next (the stage-1 byte). For the mail
         // section that equals the starter, so stage 1 is SKIPPED entirely -
         // the game never echoes 0x20; the master simply starts sending it.
@@ -3376,6 +3530,14 @@ export class GSCTrading extends TradingProtocol {
 
             // Loop for the rest
             for (let i = 0; i < length - 1; i++) {
+                // JP filler ranges are not exchanged with the device; the
+                // in-memory image gets the filler value (Python read_section)
+                const fill = sectionFillers[i + 1];
+                if (fill) {
+                    for (let j = 0; j < fill[0]; j++) receivedData[i + 1 + j] = fill[1];
+                    i += fill[0] - 1;
+                    continue;
+                }
                 // Send peer's byte (from our buffer) to GB.
                 // 0xFE is the "no input" control code and never legal section
                 // data - Python prevent_no_input escapes it to 0xFF.
@@ -3388,6 +3550,9 @@ export class GSCTrading extends TradingProtocol {
                 if (i < 10) {
                     this.log(`Buf Byte ${i}: Send=${sendByte.toString(16)}, Recv=${recvByte.toString(16)}`);
                 }
+            }
+            for (let j = 0; j < (this.EXTRA_SECTION_DROPS?.[index] || 0); j++) {
+                await this.exchangeByte(this.NO_DATA);
             }
             return receivedData;
         }
@@ -3406,7 +3571,7 @@ export class GSCTrading extends TradingProtocol {
                 if (this.verbose) this.log(`[DEBUG] Stored peer party data: ${this.peerPartyData.length} bytes`);
             } else if (index === 2 && peerData) {
                 this.peerPatchData = new Uint8Array(peerData);
-            } else if (index === 3 && peerData) {
+            } else if (index === this.getMailSectionId() && peerData) {
                 this.peerMailData = new Uint8Array(peerData);
             }
 
@@ -3420,6 +3585,14 @@ export class GSCTrading extends TradingProtocol {
         receivedData[0] = next;
 
         for (let i = 0; i < length - 1; i++) {
+            // JP filler ranges are not exchanged with the device; the
+            // in-memory image gets the filler value (Python read_section)
+            const fill = sectionFillers[i + 1];
+            if (fill) {
+                for (let j = 0; j < fill[0]; j++) receivedData[i + 1 + j] = fill[1];
+                i += fill[0] - 1;
+                continue;
+            }
             let val = 0x00;
             if (dataToSend && i < dataToSend.length) {
                 val = dataToSend[i]; // Send byte i (starts at 0)
@@ -3440,6 +3613,10 @@ export class GSCTrading extends TradingProtocol {
             await this.exchangeByte(lastVal);
         } else {
             await this.exchangeByte(0x00);
+        }
+
+        for (let j = 0; j < (this.EXTRA_SECTION_DROPS?.[index] || 0); j++) {
+            await this.exchangeByte(this.NO_DATA);
         }
 
         return receivedData;

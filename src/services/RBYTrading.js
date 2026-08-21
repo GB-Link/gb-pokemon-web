@@ -9,9 +9,9 @@
  * - No eggs, no mail
  */
 
-import { GSCTrading } from './GSCTrading.js?v=89';
-import { RBYUtils } from './RBYUtils.js?v=89';
-import { RBYTradingData, RBYChecks } from './RBYTradingDataUtils.js?v=89';
+import { GSCTrading } from './GSCTrading.js?v=90';
+import { RBYUtils } from './RBYUtils.js?v=90';
+import { RBYTradingData, RBYChecks } from './RBYTradingDataUtils.js?v=90';
 
 export class RBYTrading extends GSCTrading {
     constructor(usb, ws, logger, tradeType = 'pool', isBuffered = false, doSanityChecks = true, options = {}) {
@@ -87,47 +87,20 @@ export class RBYTrading extends GSCTrading {
         // No mail item IDs in Gen 1
         this.MAIL_ITEM_IDS = new Set(); // Empty set
 
-        // ==================== JP FILLER SUPPORT ====================
-        // Japanese Gen 1 names are 6 characters (vs 11 for International)
-        // Need to pad with 0x50 (END_OF_LINE) to match INT format
-        this.END_OF_LINE = 0x50;
-        this.SINGLE_TEXT_LEN = 0x0B;           // 11 bytes
-        this.END_OF_PLAYER_NAME_POS = 6;       // Position where player name ends in JP
-        this.END_OF_RBY_DATA_POS = 0x121;      // Position where OT names start in section 1
-        this.PLAYER_NAME_LEN_DIFF = 5;         // 11 - 6 = 5 bytes difference
-        this.POKEMON_NAME_LEN_DIFF = 5;        // Same for Pokemon nicknames
-
-        // JP Fillers: positions in section data where padding is needed
-        // Format: { position: [fillLength, fillByte] }
-        // Section 0: no fillers
-        // Section 1: player name + 6 OT names + 6 nicknames
-        // Section 2: no fillers (patches)
+        // JP text fillers (Python RBYTradingJP.fillers): INT position -> [len, value].
+        // JP games have 6-byte names; the in-memory/network image stays
+        // INT-normalized while filler positions are skipped on the wire to the
+        // device (handled by the shared readSection/synchExchangeSection paths).
+        this.SECTION_FILLERS = [{}, {}, {}];
+        this.EXTRA_SECTION_DROPS = [0, 0, 0];
         if (this.isJapanese) {
-            this.JP_FILLERS = [
-                {}, // Section 0: Random - no fillers
-                {   // Section 1: Pokemon data
-                    // Player name at position 6
-                    [this.END_OF_PLAYER_NAME_POS]: [this.PLAYER_NAME_LEN_DIFF, this.END_OF_LINE],
-                    // 6 OT names (each 11 bytes apart starting at 0x121)
-                    [this.END_OF_RBY_DATA_POS + (this.SINGLE_TEXT_LEN * 0)]: [this.PLAYER_NAME_LEN_DIFF, this.END_OF_LINE],
-                    [this.END_OF_RBY_DATA_POS + (this.SINGLE_TEXT_LEN * 1)]: [this.PLAYER_NAME_LEN_DIFF, this.END_OF_LINE],
-                    [this.END_OF_RBY_DATA_POS + (this.SINGLE_TEXT_LEN * 2)]: [this.PLAYER_NAME_LEN_DIFF, this.END_OF_LINE],
-                    [this.END_OF_RBY_DATA_POS + (this.SINGLE_TEXT_LEN * 3)]: [this.PLAYER_NAME_LEN_DIFF, this.END_OF_LINE],
-                    [this.END_OF_RBY_DATA_POS + (this.SINGLE_TEXT_LEN * 4)]: [this.PLAYER_NAME_LEN_DIFF, this.END_OF_LINE],
-                    [this.END_OF_RBY_DATA_POS + (this.SINGLE_TEXT_LEN * 5)]: [this.PLAYER_NAME_LEN_DIFF, this.END_OF_LINE],
-                    // 6 Nicknames (following OT names)
-                    [this.END_OF_RBY_DATA_POS + (this.SINGLE_TEXT_LEN * 6)]: [this.POKEMON_NAME_LEN_DIFF, this.END_OF_LINE],
-                    [this.END_OF_RBY_DATA_POS + (this.SINGLE_TEXT_LEN * 7)]: [this.POKEMON_NAME_LEN_DIFF, this.END_OF_LINE],
-                    [this.END_OF_RBY_DATA_POS + (this.SINGLE_TEXT_LEN * 8)]: [this.POKEMON_NAME_LEN_DIFF, this.END_OF_LINE],
-                    [this.END_OF_RBY_DATA_POS + (this.SINGLE_TEXT_LEN * 9)]: [this.POKEMON_NAME_LEN_DIFF, this.END_OF_LINE],
-                    [this.END_OF_RBY_DATA_POS + (this.SINGLE_TEXT_LEN * 10)]: [this.POKEMON_NAME_LEN_DIFF, this.END_OF_LINE],
-                    [this.END_OF_RBY_DATA_POS + (this.SINGLE_TEXT_LEN * 11)]: [this.POKEMON_NAME_LEN_DIFF, this.END_OF_LINE]
-                },
-                {}  // Section 2: Patches - no fillers
-            ];
+            const fillers = {};
+            fillers[6] = [5, 0x50]; // trainer name
+            for (let i = 0; i < 12; i++) { // 6 OT names + 6 nicknames
+                fillers[0x121 + i * 0x0B] = [5, 0x50];
+            }
+            this.SECTION_FILLERS[1] = fillers;
             this.log("[RBY-JP] Japanese mode enabled with text fillers");
-        } else {
-            this.JP_FILLERS = [{}, {}, {}]; // No fillers for INT versions
         }
     }
 
@@ -1243,123 +1216,9 @@ export class RBYTrading extends GSCTrading {
             }
         }
 
-        // Call parent readSection with processed data
-        const receivedData = await super.readSection(index, processedSendData, skipSync);
-
-        // Apply JP fillers if Japanese mode and we have fillers for this section
-        if (this.isJapanese && receivedData && this.JP_FILLERS[index]) {
-            const fillers = this.JP_FILLERS[index];
-            if (Object.keys(fillers).length > 0) {
-                return this.applyJpFillers(receivedData, fillers);
-            }
-        }
-
-        return receivedData;
-    }
-
-    /**
-     * Apply JP fillers to section data.
-     * Inserts padding bytes at specified positions to convert JP format to INT format.
-     * 
-     * @param {Uint8Array} data - Raw data received from Game Boy
-     * @param {Object} fillers - Map of position -> [fillLength, fillByte]
-     * @returns {Uint8Array} - Data with fillers applied
-     */
-    applyJpFillers(data, fillers) {
-        // Sort filler positions in ascending order
-        const positions = Object.keys(fillers).map(Number).sort((a, b) => a - b);
-
-        if (positions.length === 0) {
-            return data;
-        }
-
-        // Calculate total fill bytes to add
-        let totalFillBytes = 0;
-        for (const pos of positions) {
-            totalFillBytes += fillers[pos][0];
-        }
-
-        // Create new array with room for filler bytes
-        const result = new Uint8Array(data.length + totalFillBytes);
-
-        let srcOffset = 0;
-        let dstOffset = 0;
-
-        for (const pos of positions) {
-            const [fillLength, fillByte] = fillers[pos];
-
-            // Copy data up to this position
-            const copyLen = pos - srcOffset;
-            if (copyLen > 0 && srcOffset < data.length) {
-                result.set(data.slice(srcOffset, srcOffset + copyLen), dstOffset);
-                dstOffset += copyLen;
-                srcOffset += copyLen;
-            }
-
-            // Insert filler bytes
-            for (let i = 0; i < fillLength; i++) {
-                result[dstOffset++] = fillByte;
-            }
-        }
-
-        // Copy remaining data
-        if (srcOffset < data.length) {
-            result.set(data.slice(srcOffset), dstOffset);
-        }
-
-        this.log(`[RBY-JP] Applied ${positions.length} fillers, expanded ${data.length} -> ${result.length} bytes`);
-        return result;
-    }
-
-    /**
-     * Remove JP fillers from section data before sending to Japanese Game Boy.
-     * Reverses the applyJpFillers operation.
-     * 
-     * @param {Uint8Array} data - INT format data
-     * @param {Object} fillers - Map of position -> [fillLength, fillByte]
-     * @returns {Uint8Array} - JP format data with fillers removed
-     */
-    removeJpFillers(data, fillers) {
-        const positions = Object.keys(fillers).map(Number).sort((a, b) => a - b);
-
-        if (positions.length === 0) {
-            return data;
-        }
-
-        // Calculate total fill bytes to remove
-        let totalFillBytes = 0;
-        for (const pos of positions) {
-            totalFillBytes += fillers[pos][0];
-        }
-
-        // Create new array without filler bytes
-        const result = new Uint8Array(data.length - totalFillBytes);
-
-        let srcOffset = 0;
-        let dstOffset = 0;
-
-        for (const pos of positions) {
-            const [fillLength, _] = fillers[pos];
-
-            // Copy data up to this position
-            const copyLen = pos - dstOffset;
-            if (copyLen > 0 && srcOffset < data.length) {
-                result.set(data.slice(srcOffset, srcOffset + copyLen), dstOffset);
-                srcOffset += copyLen;
-                dstOffset += copyLen;
-            }
-
-            // Skip filler bytes in source
-            srcOffset += fillLength;
-        }
-
-        // Copy remaining data
-        if (dstOffset < result.length && srcOffset < data.length) {
-            result.set(data.slice(srcOffset, srcOffset + (result.length - dstOffset)), dstOffset);
-        }
-
-        this.log(`[RBY-JP] Removed ${positions.length} fillers, shrunk ${data.length} -> ${result.length} bytes`);
-        return result;
+        // Call parent readSection with processed data (JP fillers are handled
+        // by the shared section paths via SECTION_FILLERS)
+        return await super.readSection(index, processedSendData, skipSync);
     }
 
     // ==================== VEC FLOOD OVERRIDES ====================
