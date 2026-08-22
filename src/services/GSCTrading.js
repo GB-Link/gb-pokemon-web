@@ -358,26 +358,23 @@ export class GSCTrading extends TradingProtocol {
         // Start with OLD protocol (compat_3_mode = true in ref impl)
         this.useNewProtocol = false;
 
-        const versionData = new Uint8Array([4, 0, 0, 0, 0, 0]);
-        this.ws.sendData("VEC2", versionData); // Send our client version
-
-        await this.sleep(100); // Wait between messages
-
-        this.ws.sendGetData("VES2"); // Get server version
-        const serverVersion = await this.waitForMessage("VES2");
+        // Version was sent at startTrade (4.1 behavior). Fetch the server
+        // version, then poll for the peer's: Python 4.1 waits up to 10s with
+        // GET recovery; a 3.x peer never answers and we fall back to OLD.
+        this.ws.sendGetData(this.MSG_VES);
+        const serverVersion = await this.waitForMessage(this.MSG_VES);
         if (this.verbose) this.log(`Server Version: ${serverVersion}`);
 
-        // For link trades, check if peer sent their VEC2 - if so, use NEW protocol
         if (this.isLinkTrade) {
-            // Wait briefly for peer's VEC2
-            await this.sleep(5000); // Python waits 5s for the peer version (attempt_receive)
-            const peerVersion = this.ws.recvDict["VEC2"];
+            const peerVersion = await this.waitForMessage(this.MSG_VEC, 10000);
             if (peerVersion && peerVersion.length > 0) {
                 this.useNewProtocol = true;
                 this.log("Peer supports NEW protocol (32-byte SNG2)");
             } else {
-                // Default to OLD protocol when negotiation fails
                 this.useNewProtocol = false;
+                // Python reset_client_version: withdraw our version so the
+                // peer's own window also fails and both settle on OLD
+                delete this.ws.sendDict[this.MSG_VEC];
                 this.log("Peer version not received. Using OLD protocol (7-byte SNG2) for compatibility.");
             }
         }
@@ -2315,6 +2312,11 @@ export class GSCTrading extends TradingProtocol {
         // First, enter the room (only done once at the very beginning)
         this.log(`Starting GSC Trade Protocol (${this.tradeType} mode, ${this.isBuffered ? 'buffered' : 'sync'})...`);
 
+        // 4.1 behavior: send the client version immediately so the peer's
+        // version window can never miss it; the receive/decision stays in
+        // tradeStartingSequence.
+        this.ws.sendData(this.MSG_VEC, this.versionData());
+
         // Load default party data (ZUBAT) for ghost trades
         // IMPORTANT: Always load for link trades even if initially sync mode,
         // because negotiation may switch us to buffered mode later!
@@ -2378,20 +2380,15 @@ export class GSCTrading extends TradingProtocol {
         while (!this.stopTrade) {
             if (this.verbose) this.log(`[DEBUG] startTrade loop start. ownBlankTrade=${this.ownBlankTrade}, otherBlankTrade=${this.otherBlankTrade}`);
             try {
-                // START VEC2 FLOOD: Ensure ref impl receives VEC2 regardless of timing (Sit vs Negotiate)
-                this.startVEC2Flood();
-
                 // Sit at table - GB returns to this state after each trade
                 this.log("Sitting at table...");
                 const sitResult = await this.sitToTableWithTimeout();
                 if (!sitResult) {
                     this.log("Player left trading room. Exiting...");
-                    this.stopVEC2Flood();
                     break;
                 }
 
                 if (this.stopTrade) {
-                    this.stopVEC2Flood();
                     break;
                 }
                 this.log("Sat at table. Starting Trade Sequence...");
@@ -2423,9 +2420,6 @@ export class GSCTrading extends TradingProtocol {
                     this.log("Subsequent trade sequence (reusing cached data)...");
                     await this.subsequentTradeSequence();
                 }
-
-                // Stop flood after negotiation completes
-                this.stopVEC2Flood();
 
                 // Flag reset is now handled INSIDE the sequence functions, BEFORE linkTradeMenuLoop
                 // This matches placement at lines 1462-1463 (before do_trade)
@@ -3664,26 +3658,6 @@ export class GSCTrading extends TradingProtocol {
                 resolve(null);
             }, 5000);
         });
-    }
-
-    startVEC2Flood() {
-        if (this.vec2FloodInterval) return;
-        if (this.verbose) this.log(`Starting VEC Flood (${this.MSG_VEC}) to ensure ref impl sees Version...`);
-        const versionData = new Uint8Array([4, 0, 0, 0, 0, 0]);
-        const msgTag = this.MSG_VEC; // Capture for closure
-        this.vec2FloodInterval = setInterval(() => {
-            if (this.ws && this.ws.isConnected) {
-                this.ws.sendData(msgTag, versionData);
-            }
-        }, 200);
-    }
-
-    stopVEC2Flood() {
-        if (this.vec2FloodInterval) {
-            clearInterval(this.vec2FloodInterval);
-            this.vec2FloodInterval = null;
-            if (this.verbose) this.log("Stopped VEC2 Flood.");
-        }
     }
 }
 

@@ -98,6 +98,9 @@ export class RSESPTrading extends TradingProtocol {
     async startTrade() {
         this.log("Starting Gen 3 Trade...");
 
+        // 4.1 behavior: send the client version immediately
+        this.ws.sendData("VEC3", this.versionData());
+
         // Load RSESPUtils data files
         await RSESPUtils.load();
 

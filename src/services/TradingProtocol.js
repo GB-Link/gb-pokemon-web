@@ -21,6 +21,11 @@ export class TradingProtocol {
         this.logger(msg);
     }
 
+    // TradingVersion 4.1.0 (little-endian 16-bit major/minor/build)
+    versionData() {
+        return new Uint8Array([4, 0, 1, 0, 0, 0]);
+    }
+
     // Log only if verbose mode is enabled
     logVerbose(msg) {
         if (this.verbose) {
