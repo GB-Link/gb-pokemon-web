@@ -18,6 +18,7 @@ export class SettingsManager {
         // 2-Player Options
         isBuffered: false,
         crashOnSyncDrop: true,
+        battleTurnTime: 30,
 
         // Pool Trade Options
         maxLevel: 100,

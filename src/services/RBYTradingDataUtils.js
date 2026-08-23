@@ -3,9 +3,9 @@
  * Extends GSC data structures with RBY-specific formats.
  */
 
-import { RBYUtils } from './RBYUtils.js?v=90';
-import { GSCTradingText, GSCTradingPartyInfo, GSCTradingData } from './GSCTradingDataUtils.js?v=90';
-import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=90';
+import { RBYUtils } from './RBYUtils.js?v=91';
+import { GSCTradingText, GSCTradingPartyInfo, GSCTradingData } from './GSCTradingDataUtils.js?v=91';
+import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=91';
 
 /**
  * RBY Pokemon info with Gen 1 specific structure (44 bytes vs 48 for GSC)
@@ -32,6 +32,56 @@ export class RBYPokemonInfo extends GSCPokemonInfo {
 
     constructor(data, start, length = RBYPokemonInfo.pokemon_data_len) {
         super(data, start, length);
+    }
+
+    // Gen 1 struct accessors: the GSC getters read GSCPokemonInfo's own static
+    // offsets, so these must re-point moves/PP at the RBY positions (8 / 0x1D)
+    getMove(pos) {
+        return this.values[RBYPokemonInfo.moves_pos + pos];
+    }
+
+    setMove(pos, val, maxPp = true) {
+        this.values[RBYPokemonInfo.moves_pos + pos] = val;
+        if (maxPp) {
+            const ppTable = this.getPpTable();
+            if (ppTable) {
+                this.setPP(pos, ppTable[val] || 0);
+            }
+        }
+    }
+
+    getPP(pos) {
+        return this.values[RBYPokemonInfo.pps_pos + pos];
+    }
+
+    setPP(pos, val) {
+        this.values[RBYPokemonInfo.pps_pos + pos] = val;
+    }
+
+    getPpTable() {
+        return RBYUtils.movesPpList;
+    }
+
+    getCurrHp() {
+        return this.readShort(RBYPokemonInfo.curr_hp_pos);
+    }
+
+    setCurrHp(val) {
+        this.writeShort(RBYPokemonInfo.curr_hp_pos, val);
+    }
+
+    getMaxHp() {
+        return this.readShort(RBYPokemonInfo.stats_pos);
+    }
+
+    heal() {
+        this.setCurrHp(this.getMaxHp());
+        this.values[RBYPokemonInfo.status_pos] = 0;
+    }
+
+    faint() {
+        this.setCurrHp(0);
+        this.values[RBYPokemonInfo.status_pos] = 0;
     }
 
     /**
@@ -128,9 +178,9 @@ export class RBYTradingData extends GSCTradingData {
     }
 
     /**
-     * Build Pokemon array for RBY (different offsets)
+     * Build Pokemon array for RBY (different offsets; no mail)
      */
-    buildPokemonArray(dataPokemon, doFull) {
+    buildPokemonArray(dataPokemon, dataMail, doFull) {
         this.pokemon = [];
 
         if (doFull) {

@@ -14,6 +14,11 @@ This is a work in progress JavaScript-based web application for **PokemonGB_Onli
     - **International Versions**: Fully working (Pool Trade & 2-Player).
     - **Japanese Versions**: Not tested.
     - **Mail**: Not tested.
+
+- **Link Battles (Gen 1 & Gen 2)**:
+    - 2-Player battles over the same server as the Python client (the two are interoperable - a web player can battle a CLI player).
+    - Japanese versions supported the same way as the Python client (no mail, name fillers handled).
+    - Not tested on real hardware yet.
 - **Multiboot**:
     - **Sending**: Sends the Gen3toGenx multiboot ROM to GBA. Using the Pokemon-Gen3-to-GenX project. https://github.com/Lorenzooone/Pokemon-Gen3-to-Gen-X
 
@@ -38,6 +43,17 @@ This is a work in progress JavaScript-based web application for **PokemonGB_Onli
 - Initiate Trade in game.
 - For **Pool Trade**: The server will automatically select a Pokémon for you to receive.
 - For **2-Player Trade**: Coordinate with another player in the same room.
+
+### Battles (Gen 1 & Gen 2)
+- Select your generation, pick **Battle**, and share a room code with the other player (they can use this web client or the Python CLI).
+- Go to the Cable Club and enter the **Colosseum** (not the Trade Center).
+- Notes ported from the Python client:
+    - **Gen 2** waits between turns (default 30 s, changeable in Settings, skippable with the "Start turn now" button) because the inputs of the two games must stay in lockstep. Beat Up is known to be risky.
+    - **Gen 1** has no wait, but Counter, Mirror Move, Psywave, Fly, Dig and Mimic can desync the battle, and turn order can look odd.
+    - Sanity checks validate the opponent's data and moves; if the data had to be fixed, the battle is aborted before it starts ("SOMETHING CHANGED").
+    - Gen 2's Whirlwind/Roar/Metronome/Mimic temporarily make the opponent's moves unverifiable.
+    - **Buffered mode** starts with a ghost battle against a stand-in "FLEE" party: pick any action, then flee - the real battle follows.
+    - Battles are not available for Gen 3 or Time Capsule.
 
 ## Troubleshooting
 - Currently when refreshing the web page most of the time the pico/usb device needs to be reset. Unplugging or pressing reset on the USB adapter should acomplish this

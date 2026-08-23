@@ -1,8 +1,8 @@
 
-import { TradingProtocol } from './TradingProtocol.js?v=90';
-import { GSCUtils } from './GSCUtils.js?v=90';
-import { GSCChecks } from './GSCChecks.js?v=90';
-import { GSCJPMailConverter } from './GSCJPMailConverter.js?v=90';
+import { TradingProtocol } from './TradingProtocol.js?v=91';
+import { GSCUtils } from './GSCUtils.js?v=91';
+import { GSCChecks } from './GSCChecks.js?v=91';
+import { GSCJPMailConverter } from './GSCJPMailConverter.js?v=91';
 
 export class GSCTrading extends TradingProtocol {
     constructor(usb, ws, logger, tradeType = 'pool', isBuffered = false, doSanityChecks = true, options = {}) {
@@ -207,7 +207,7 @@ export class GSCTrading extends TradingProtocol {
             // Check immediately if we already received buffered data from peer
             if (this.ws.recvDict[msgBuf]) {
                 clearTimeout(timeout);
-                this.log(`Peer already connected (received ${msgBuf})! Starting trade...`);
+                this.log(`Peer already connected (received ${msgBuf})!`);
                 resolve();
                 return;
             }
@@ -221,14 +221,14 @@ export class GSCTrading extends TradingProtocol {
                     clearTimeout(timeout);
                     clearInterval(pollInterval);
                     this.ws.ws.removeEventListener('message', checkMessage);
-                    this.log("Peer connected (CLIENT signal)! Starting trade...");
+                    this.log("Peer connected (CLIENT signal)!");
                     resolve();
                 } else if (data instanceof Blob || data instanceof ArrayBuffer) {
                     // Binary data = peer is sending trade data, they're connected
                     clearTimeout(timeout);
                     clearInterval(pollInterval);
                     this.ws.ws.removeEventListener('message', checkMessage);
-                    this.log("Peer connected (trade data received)! Starting trade...");
+                    this.log("Peer connected (data received)!");
                     resolve();
                 }
             };
@@ -242,7 +242,7 @@ export class GSCTrading extends TradingProtocol {
                     clearTimeout(timeout);
                     clearInterval(pollInterval);
                     this.ws.ws.removeEventListener('message', checkMessage);
-                    this.log(`Peer already connected (received ${msgBuf})! Starting trade...`);
+                    this.log(`Peer already connected (received ${msgBuf})!`);
                     resolve();
                 }
             }, 500);

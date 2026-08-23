@@ -14,7 +14,7 @@
  *     sync 'GB'   0=cmd,1=data,2=status
  */
 
-import { CMD, MODE } from './UsbConnection.js?v=90';
+import { CMD, MODE } from './UsbConnection.js?v=91';
 export { CMD, MODE };
 
 const SYNC_0 = 0x47; // 'G'
