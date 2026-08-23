@@ -1,7 +1,7 @@
 
-import { GSCUtils } from './GSCUtils.js?v=90';
-import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=90';
-import { GSCTradingData, GSCTradingText } from './GSCTradingDataUtils.js?v=90';
+import { GSCUtils } from './GSCUtils.js?v=91';
+import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=91';
+import { GSCTradingData, GSCTradingText } from './GSCTradingDataUtils.js?v=91';
 
 // ==================== RSESPUtils ====================
 

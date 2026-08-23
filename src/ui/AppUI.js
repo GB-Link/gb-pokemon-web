@@ -1,13 +1,15 @@
 
-import { UsbConnection, CMD, MODE } from '../services/UsbConnection.js?v=90';
-import { SerialConnection } from '../services/SerialConnection.js?v=90';
-import { BgbConnection } from '../services/BgbConnection.js?v=90';
-import { WebSocketClient } from '../services/WebSocketClient.js?v=90';
-import { RBYTrading } from '../services/RBYTrading.js?v=90';
-import { GSCTrading } from '../services/GSCTrading.js?v=90';
-import { SettingsManager } from '../services/SettingsManager.js?v=90';
-import { multiboot } from '../services/Multiboot.js?v=90';
-import { RSESPTrading } from '../services/RSESPTrading.js?v=90';
+import { UsbConnection, CMD, MODE } from '../services/UsbConnection.js?v=91';
+import { SerialConnection } from '../services/SerialConnection.js?v=91';
+import { BgbConnection } from '../services/BgbConnection.js?v=91';
+import { WebSocketClient } from '../services/WebSocketClient.js?v=91';
+import { RBYTrading } from '../services/RBYTrading.js?v=91';
+import { GSCTrading } from '../services/GSCTrading.js?v=91';
+import { RBYBattling } from '../services/RBYBattling.js?v=91';
+import { GSCBattling } from '../services/GSCBattling.js?v=91';
+import { SettingsManager } from '../services/SettingsManager.js?v=91';
+import { multiboot } from '../services/Multiboot.js?v=91';
+import { RSESPTrading } from '../services/RSESPTrading.js?v=91';
 
 export class AppUI {
     constructor() {
@@ -54,6 +56,10 @@ export class AppUI {
             settingDarkMode: document.getElementById('setting-dark-mode'),
             settingBuffered: document.getElementById('setting-buffered'),
             settingCrashSync: document.getElementById('setting-crash-sync'),
+            settingBattleTurnTime: document.getElementById('setting-battle-turn-time'),
+            battleWaitCard: document.getElementById('battle-wait-card'),
+            battleWaitText: document.getElementById('battle-wait-text'),
+            btnBattleSkipWait: document.getElementById('btn-battle-skip-wait'),
             settingMaxLevel: document.getElementById('setting-max-level'),
             settingMaxLevelSlider: document.getElementById('setting-max-level-slider'),
             settingConvertEggs: document.getElementById('setting-convert-eggs'),
@@ -123,6 +129,8 @@ export class AppUI {
             btn.addEventListener('click', () => this.onTradeTypeSelect(btn));
         });
 
+        this.elements.btnBattleSkipWait.addEventListener('click', () => this.protocol?.skipTurnWait?.());
+
         this.elements.btnSettings.addEventListener('click', () => this.openSettings());
         this.elements.btnCloseSettings.addEventListener('click', () => this.closeSettings());
         this.elements.btnResetDefaults.addEventListener('click', () => this.resetToDefaults());
@@ -135,7 +143,8 @@ export class AppUI {
             this.elements.settingServerUrl, this.elements.settingJapanese,
             this.elements.settingSanityChecks, this.elements.settingVerbose,
             this.elements.settingDarkMode, this.elements.settingBuffered,
-            this.elements.settingCrashSync, this.elements.settingMaxLevel,
+            this.elements.settingCrashSync, this.elements.settingBattleTurnTime,
+            this.elements.settingMaxLevel,
             this.elements.settingMaxLevelSlider, this.elements.settingConvertEggs
         ];
         settingInputs.forEach(input => {
@@ -167,6 +176,7 @@ export class AppUI {
         this.elements.settingDarkMode.checked = s.darkMode;
         this.elements.settingBuffered.checked = s.isBuffered;
         this.elements.settingCrashSync.checked = s.crashOnSyncDrop;
+        this.elements.settingBattleTurnTime.value = s.battleTurnTime;
         this.elements.settingMaxLevel.value = s.maxLevel;
         this.elements.settingMaxLevelSlider.value = s.maxLevel;
         this.elements.settingConvertEggs.checked = s.convertToEggs;
@@ -181,6 +191,9 @@ export class AppUI {
         this.settings.set('darkMode', this.elements.settingDarkMode.checked);
         this.settings.set('isBuffered', this.elements.settingBuffered.checked);
         this.settings.set('crashOnSyncDrop', this.elements.settingCrashSync.checked);
+        const battleTurnTime = Math.max(0, parseInt(this.elements.settingBattleTurnTime.value) || 0);
+        this.settings.set('battleTurnTime', battleTurnTime);
+        this.elements.settingBattleTurnTime.value = battleTurnTime;
         const maxLevel = Math.max(5, Math.min(100, parseInt(this.elements.settingMaxLevel.value) || 100));
         this.settings.set('maxLevel', maxLevel);
         this.elements.settingMaxLevel.value = maxLevel;
@@ -202,6 +215,7 @@ export class AppUI {
             'darkMode': this.elements.settingDarkMode.checked,
             'isBuffered': this.elements.settingBuffered.checked,
             'crashOnSyncDrop': this.elements.settingCrashSync.checked,
+            'battleTurnTime': Math.max(0, parseInt(this.elements.settingBattleTurnTime.value) || 0),
             'maxLevel': parseInt(this.elements.settingMaxLevel.value) || 100,
             'convertToEggs': this.elements.settingConvertEggs.checked
         };
@@ -241,6 +255,7 @@ export class AppUI {
             this.elements.btnTimeCapsule.textContent = 'Time Capsule: OFF';
         }
         this.elements.btnSendMultiboot.style.display = (this.selectedGen === '3') ? 'inline-block' : 'none';
+        this.updateBattleAvailability();
         this.updateRoomCodeVisibility();
     }
 
@@ -252,13 +267,27 @@ export class AppUI {
     }
 
     updateRoomCodeVisibility() {
-        this.elements.roomCodeGroup.style.display = (this.selectedTradeType === 'link') ? 'flex' : 'none';
+        const needsRoom = this.selectedTradeType === 'link' || this.selectedTradeType === 'battle';
+        this.elements.roomCodeGroup.style.display = needsRoom ? 'flex' : 'none';
+    }
+
+    // Battles exist for Gen 1/2 only, and never through the Time Capsule
+    updateBattleAvailability() {
+        const battleBtn = this.elements.tradeTypeSelectGroup.querySelector('[data-value="battle"]');
+        if (!battleBtn) return;
+        const available = this.selectedGen !== '3' && !this.isTimeCapsule;
+        battleBtn.style.display = available ? '' : 'none';
+        if (!available && this.selectedTradeType === 'battle') {
+            const linkBtn = this.elements.tradeTypeSelectGroup.querySelector('[data-value="link"]');
+            if (linkBtn) this.onTradeTypeSelect(linkBtn);
+        }
     }
 
     toggleTimeCapsule() {
         this.isTimeCapsule = !this.isTimeCapsule;
         this.elements.btnTimeCapsule.classList.toggle('active', this.isTimeCapsule);
         this.elements.btnTimeCapsule.textContent = this.isTimeCapsule ? 'Time Capsule: ON' : 'Time Capsule: OFF';
+        this.updateBattleAvailability();
     }
 
     // === Multiboot ===
@@ -296,7 +325,7 @@ export class AppUI {
 
     showNegotiationPrompt(peerMode) {
         return new Promise((resolve) => {
-            this.elements.negotiationMessage.textContent = `The other player wants to do a ${peerMode} trade.`;
+            this.elements.negotiationMessage.textContent = `The other player wants to use a ${peerMode} connection.`;
             this.elements.negotiationPopup.style.display = 'block';
 
             const handleYes = () => {
@@ -382,6 +411,31 @@ export class AppUI {
         this.elements.progressFill.style.width = '0%';
     }
 
+    // === Battle turn-wait card (web stand-in for the CLI's ENTER-to-skip) ===
+
+    showBattleWait(seconds) {
+        this.hideBattleWait();
+        let remaining = Math.ceil(seconds);
+        this.elements.battleWaitText.textContent =
+            `Waiting ${remaining}s before checking for the next input…`;
+        this.elements.battleWaitCard.style.display = 'block';
+        this._battleWaitInterval = setInterval(() => {
+            remaining -= 1;
+            if (remaining > 0) {
+                this.elements.battleWaitText.textContent =
+                    `Waiting ${remaining}s before checking for the next input…`;
+            }
+        }, 1000);
+    }
+
+    hideBattleWait() {
+        if (this._battleWaitInterval) {
+            clearInterval(this._battleWaitInterval);
+            this._battleWaitInterval = null;
+        }
+        this.elements.battleWaitCard.style.display = 'none';
+    }
+
     // === Connection ===
 
     async connectServer() {
@@ -400,7 +454,11 @@ export class AppUI {
                     return false;
                 }
                 roomCode = roomCode.padStart(5, '0');
-                url += `/link${this.isTimeCapsule ? '1' : this.selectedGen}/${roomCode}`;
+                if (this.selectedTradeType === 'battle') {
+                    url += `/bttl${this.selectedGen}/${roomCode}`;
+                } else {
+                    url += `/link${this.isTimeCapsule ? '1' : this.selectedGen}/${roomCode}`;
+                }
             }
 
             this.log(`Connecting to server at ${url}...`);
@@ -428,8 +486,8 @@ export class AppUI {
             // Disable the connect button once a transport is open
             this.elements.btnConnectUsb.disabled = true;
             this.setStatus(kind === 'bgb'
-                ? 'BGB connected — pick a generation and start the trade'
-                : 'Adapter connected — pick a generation and start the trade', 'success');
+                ? 'BGB connected — pick a generation and press Start'
+                : 'Adapter connected — pick a generation and press Start', 'success');
             this.checkReady();
         } catch (error) {
             this.log(`${kind} connection failed: ${error}`);
@@ -484,7 +542,7 @@ export class AppUI {
         }
 
         this.isTradeActive = true;
-        this.elements.btnStartTrade.textContent = 'Stop Trade';
+        this.elements.btnStartTrade.textContent = 'Stop';
         this.elements.btnStartTrade.disabled = false;
 
         // Per-packet websocket console dumps only when verbose is enabled
@@ -528,7 +586,20 @@ export class AppUI {
 
         this.log(`Starting ${tradeType} trade for Gen ${gen} (${isBuffered ? 'buffered' : 'sync'} mode)...`);
 
-        if (gen === '1') {
+        if (tradeType === 'battle') {
+            const battleOptions = {
+                isJapanese: this.settings.get('isJapanese'),
+                verbose: this.settings.get('verbose'),
+                crashOnSyncDrop: this.settings.get('crashOnSyncDrop'),
+                battleTurnTime: this.settings.get('battleTurnTime'),
+                negotiationPrompt: (peerMode) => this.showNegotiationPrompt(peerMode)
+            };
+            this.protocol = (gen === '1')
+                ? new RBYBattling(this.usb, this.ws, (msg) => this.log(msg),
+                    tradeType, isBuffered, doSanityChecks, battleOptions)
+                : new GSCBattling(this.usb, this.ws, (msg) => this.log(msg),
+                    tradeType, isBuffered, doSanityChecks, battleOptions);
+        } else if (gen === '1') {
             this.protocol = new RBYTrading(this.usb, this.ws, (msg) => this.log(msg),
                 tradeType, isBuffered, doSanityChecks, {
                 isJapanese: this.settings.get('isJapanese'),
@@ -574,13 +645,19 @@ export class AppUI {
             const names = protocol.SECTION_NAMES || [];
             this.setProgress(names[sectionIndex] || `Section ${sectionIndex}`, done, total);
         };
-        this.setStatus('Initiate the trade on your Game Boy', 'active');
+        if (tradeType === 'battle') {
+            protocol.onTurnWait = (seconds) => this.showBattleWait(seconds);
+            protocol.onTurnWaitEnd = () => this.hideBattleWait();
+            this.setStatus('Enter the Colosseum and start a battle on your Game Boy', 'active');
+        } else {
+            this.setStatus('Initiate the trade on your Game Boy', 'active');
+        }
 
         // Surface a mid-trade server disconnect instead of letting the trade
         // loops poll a dead connection forever.
         this.ws.onDisconnect = () => {
             if (!protocol.stopTrade) {
-                this.log('Server connection lost - stopping trade.');
+                this.log('Server connection lost - stopping.');
                 protocol.stopTrade = true;
             }
         };
@@ -589,7 +666,7 @@ export class AppUI {
             try {
                 await protocol.startTrade();
             } catch (error) {
-                this.log(`Trade error: ${error}`);
+                this.log(`Session error: ${error}`);
             } finally {
                 this.ws.onDisconnect = null;
                 if (protocol.stopVEC2Flood) protocol.stopVEC2Flood();
@@ -601,7 +678,7 @@ export class AppUI {
     }
 
     async stopTrade() {
-        this.log('Stopping trade...');
+        this.log('Stopping...');
         if (this.protocol) this.protocol.stopTrade = true;
         if (this.ws) this.ws.onDisconnect = null;
         if (this.ws && this.ws.isConnected) this.ws.disconnect();
@@ -611,14 +688,15 @@ export class AppUI {
             await Promise.race([this.tradePromise, new Promise(r => setTimeout(r, 3000))]);
         }
         this.resetTradeButton();
-        this.setStatus('Trade stopped', 'warning');
-        this.log('Trade stopped. You can start a new trade.');
+        this.setStatus('Stopped', 'warning');
+        this.log('Stopped. You can start a new session.');
     }
 
     resetTradeButton() {
         this.isTradeActive = false;
-        this.elements.btnStartTrade.textContent = 'Start Trade';
+        this.elements.btnStartTrade.textContent = 'Start';
         this.elements.btnStartTrade.disabled = false;
         this.hideProgress();
+        this.hideBattleWait();
     }
 }

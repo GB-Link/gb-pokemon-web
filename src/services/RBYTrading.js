@@ -9,9 +9,9 @@
  * - No eggs, no mail
  */
 
-import { GSCTrading } from './GSCTrading.js?v=90';
-import { RBYUtils } from './RBYUtils.js?v=90';
-import { RBYTradingData, RBYChecks } from './RBYTradingDataUtils.js?v=90';
+import { GSCTrading } from './GSCTrading.js?v=91';
+import { RBYUtils } from './RBYUtils.js?v=91';
+import { RBYTradingData, RBYChecks } from './RBYTradingDataUtils.js?v=91';
 
 export class RBYTrading extends GSCTrading {
     constructor(usb, ws, logger, tradeType = 'pool', isBuffered = false, doSanityChecks = true, options = {}) {
@@ -110,6 +110,10 @@ export class RBYTrading extends GSCTrading {
     async startTrade() {
         this.log(`Starting RBY Trade Protocol (${this.tradeType} mode, ${this.isBuffered ? 'buffered' : 'sync'})...`);
 
+        // 4.1 behavior: send the client version immediately (receive/decision
+        // stays in tradeStartingSequence)
+        this.ws.sendData(this.MSG_VEC, this.versionData());
+
         // Load base.bin template for proper trading data structure
         // ref impl uses this pre-baked template to ensure correct party format
         if (!RBYUtils.basePoolData) {
@@ -169,14 +173,8 @@ export class RBYTrading extends GSCTrading {
         while (!this.stopTrade) {
             if (this.verbose) this.log(`[DEBUG] RBY startTrade loop. ownBlankTrade=${this.ownBlankTrade}, otherBlankTrade=${this.otherBlankTrade}`);
             try {
-                // Start VEC1 flood for version exchange
-                this.startVEC2Flood(); // Uses MSG_VEC getter internally
-
                 // Sit at table
                 await this.sitToTable();
-
-                // Stop VEC1 flood
-                this.stopVEC2Flood();
 
                 // Wait for negotiation to complete if link trade
                 if (negotiationPromise) {
@@ -377,23 +375,23 @@ export class RBYTrading extends GSCTrading {
         await this.sleep(100);
 
         this.useNewProtocol = false;
-        const versionData = new Uint8Array([4, 0, 0, 0, 0, 0]);
-        this.ws.sendData(this.MSG_VEC, versionData);
-
-        await this.sleep(100);
+        // Version was sent at startTrade (4.1 behavior). Fetch the server
+        // version, then poll for the peer's (10s with GET recovery; a 3.x
+        // peer never answers and we fall back to OLD).
         this.ws.sendGetData(this.MSG_VES);
         const serverVersion = await this.waitForMessage(this.MSG_VES);
         if (this.verbose) this.log(`Server Version: ${serverVersion}`);
 
-        // Check for peer version in link trade
         if (this.isLinkTrade) {
-            await this.sleep(5000); // Python waits 5s for the peer version (attempt_receive)
-            const peerVersion = this.ws.recvDict[this.MSG_VEC];
+            const peerVersion = await this.waitForMessage(this.MSG_VEC, 10000);
             if (peerVersion && peerVersion.length > 0) {
                 this.useNewProtocol = true;
                 this.log("Peer supports NEW protocol");
             } else {
                 this.useNewProtocol = false;
+                // Python reset_client_version: withdraw our version so the
+                // peer's own window also fails and both settle on OLD
+                delete this.ws.sendDict[this.MSG_VEC];
                 this.log("Using OLD protocol for compatibility");
             }
         }
@@ -1219,27 +1217,5 @@ export class RBYTrading extends GSCTrading {
         // Call parent readSection with processed data (JP fillers are handled
         // by the shared section paths via SECTION_FILLERS)
         return await super.readSection(index, processedSendData, skipSync);
-    }
-
-    // ==================== VEC FLOOD OVERRIDES ====================
-    // Must override to use VEC1 instead of hardcoded VEC2
-
-    startVEC2Flood() {
-        if (this.vec2FloodInterval) return;
-        this.log("Starting VEC1 Flood to ensure server sees Version...");
-        const versionData = new Uint8Array([4, 0, 0, 0, 0, 0]);
-        this.vec2FloodInterval = setInterval(() => {
-            if (this.ws && this.ws.isConnected) {
-                this.ws.sendData(this.MSG_VEC, versionData); // Uses VEC1 getter
-            }
-        }, 200);
-    }
-
-    stopVEC2Flood() {
-        if (this.vec2FloodInterval) {
-            clearInterval(this.vec2FloodInterval);
-            this.vec2FloodInterval = null;
-            this.log("Stopped VEC1 Flood.");
-        }
     }
 }

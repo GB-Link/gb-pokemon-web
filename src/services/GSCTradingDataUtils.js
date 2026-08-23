@@ -8,8 +8,8 @@
  * - Trading between parties
  * - Data export for hardware
  */
-import { GSCUtils } from './GSCUtils.js?v=90';
-import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=90';
+import { GSCUtils } from './GSCUtils.js?v=91';
+import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=91';
 
 /**
  * Simple text holder class (matches ref. impl's GSCTradingText)
@@ -94,34 +94,39 @@ export class GSCTradingData {
         this.partyInfo = new GSCTradingPartyInfo(dataPokemon, GSCTradingData.TRADING_PARTY_INFO_POS);
         this.trainerInfo = this.readShort(dataPokemon, GSCTradingData.TRADER_INFO_POS);
         this.pokemon = [];
+        this.buildPokemonArray(dataPokemon, dataMail, doFull);
+    }
 
-        if (doFull) {
-            for (let i = 0; i < this.getPartySize(); i++) {
-                const mon = new GSCPokemonInfo(
-                    dataPokemon,
-                    GSCTradingData.TRADING_POKEMON_POS + i * GSCTradingData.TRADING_POKEMON_LENGTH
-                );
-                mon.addOtName(
-                    dataPokemon,
-                    GSCTradingData.TRADING_POKEMON_OT_POS + i * GSCTradingData.TRADING_NAME_LENGTH
-                );
-                mon.addNickname(
-                    dataPokemon,
-                    GSCTradingData.TRADING_POKEMON_NICKNAME_POS + i * GSCTradingData.TRADING_NAME_LENGTH
-                );
+    /**
+     * Parse the per-mon structures; RBY overrides this with its own offsets.
+     */
+    buildPokemonArray(dataPokemon, dataMail, doFull) {
+        if (!doFull) return;
+        for (let i = 0; i < this.getPartySize(); i++) {
+            const mon = new GSCPokemonInfo(
+                dataPokemon,
+                GSCTradingData.TRADING_POKEMON_POS + i * GSCTradingData.TRADING_POKEMON_LENGTH
+            );
+            mon.addOtName(
+                dataPokemon,
+                GSCTradingData.TRADING_POKEMON_OT_POS + i * GSCTradingData.TRADING_NAME_LENGTH
+            );
+            mon.addNickname(
+                dataPokemon,
+                GSCTradingData.TRADING_POKEMON_NICKNAME_POS + i * GSCTradingData.TRADING_NAME_LENGTH
+            );
 
-                if (dataMail && mon.hasMail()) {
-                    mon.addMail(
-                        dataMail,
-                        GSCTradingData.TRADING_POKEMON_MAIL_POS + i * GSCTradingData.TRADING_MAIL_LENGTH
-                    );
-                    mon.addMailSender(
-                        dataMail,
-                        GSCTradingData.TRADING_POKEMON_MAIL_SENDER_POS + i * GSCTradingData.TRADING_MAIL_SENDER_LENGTH
-                    );
-                }
-                this.pokemon.push(mon);
+            if (dataMail && mon.hasMail()) {
+                mon.addMail(
+                    dataMail,
+                    GSCTradingData.TRADING_POKEMON_MAIL_POS + i * GSCTradingData.TRADING_MAIL_LENGTH
+                );
+                mon.addMailSender(
+                    dataMail,
+                    GSCTradingData.TRADING_POKEMON_MAIL_SENDER_POS + i * GSCTradingData.TRADING_MAIL_SENDER_LENGTH
+                );
             }
+            this.pokemon.push(mon);
         }
     }
 
@@ -244,6 +249,16 @@ export class GSCTradingData {
     isSpecialMon(pos, specialMonsSet) {
         if (pos < 0 || pos >= this.getPartySize()) return false;
         return specialMonsSet.has(this.pokemon[pos].getSpecies());
+    }
+
+    /**
+     * Fully heal the entire party (HP, status, PP).
+     */
+    healParty() {
+        const lenParty = Math.min(this.getPartySize(), this.pokemon.length);
+        for (let i = 0; i < lenParty; i++) {
+            this.pokemon[i].fullHeal();
+        }
     }
 
     // ==================== TRADING ====================

@@ -27,11 +27,12 @@
             </div>
             <div class="form-group" id="trade-type-group" style="display: none;">
                 <div class="trade-type-header">
-                    <label>Trade Type:</label>
+                    <label>Connection Type:</label>
                     <span id="game-versions" class="game-versions"></span>
                 </div>
                 <div class="btn-group" id="trade-type-select">
-                    <button type="button" class="btn-option selected" data-value="link">2-Player</button>
+                    <button type="button" class="btn-option selected" data-value="link">Trade</button>
+                    <button type="button" class="btn-option" data-value="battle">Battle</button>
                     <button type="button" class="btn-option" data-value="pool">Pool Trade</button>
                 </div>
             </div>
@@ -50,7 +51,7 @@
                 <div class="button-row-right">
                     <button id="btn-time-capsule" class="btn-toggle" style="display: none;">Time Capsule: OFF</button>
                     <button id="btn-send-multiboot" style="display: none;">Send Multiboot</button>
-                    <button id="btn-start-trade" disabled>Start Trade</button>
+                    <button id="btn-start-trade" disabled>Start</button>
                 </div>
             </div>
             <div class="form-group" id="bgb-options" style="display: none; align-items: center; gap: 10px; flex-wrap: wrap;">
@@ -65,11 +66,21 @@
         <!-- Negotiation Popup -->
         <div id="negotiation-popup" class="card negotiation-card" style="display: none;">
             <h2>Mode Negotiation</h2>
-            <p id="negotiation-message">The other player wants to do a Buffered trade.</p>
+            <p id="negotiation-message">The other player wants to use a Buffered connection.</p>
             <p>Would you like to switch to their mode?</p>
             <div class="negotiation-buttons">
                 <button id="btn-negotiate-yes" class="btn-yes">Yes, Switch</button>
                 <button id="btn-negotiate-no" class="btn-no">No, Keep Mine</button>
+            </div>
+        </div>
+
+        <!-- Battle Turn Wait -->
+        <div id="battle-wait-card" class="card negotiation-card" style="display: none;">
+            <h2>Battle Turn Wait</h2>
+            <p id="battle-wait-text">Waiting before checking for the next input…</p>
+            <p>Only press "Start turn now" once your game shows "Waiting...!" — skipping while an animation is still playing can desync the battle.</p>
+            <div class="negotiation-buttons">
+                <button id="btn-battle-skip-wait" class="btn-yes">Start turn now</button>
             </div>
         </div>
 
@@ -159,9 +170,9 @@
             </div>
 
             <div class="settings-section">
-                <h3>2-Player Trade Options</h3>
+                <h3>2-Player Options</h3>
                 <div class="setting-item">
-                    <label for="setting-buffered">Buffered Trading:</label>
+                    <label for="setting-buffered">Buffered Connection:</label>
                     <label class="toggle-switch">
                         <input type="checkbox" id="setting-buffered">
                         <span class="toggle-slider"></span>
@@ -175,6 +186,12 @@
                         <span class="toggle-slider"></span>
                     </label>
                     <span class="default-indicator" data-setting="crashOnSyncDrop"></span>
+                </div>
+                <div class="setting-item">
+                    <label for="setting-battle-turn-time">Battle Turn Time (s, Gen 2):</label>
+                    <input type="number" id="setting-battle-turn-time" min="0" step="1" value="30"
+                        class="setting-level-number">
+                    <span class="default-indicator" data-setting="battleTurnTime"></span>
                 </div>
             </div>
 
@@ -206,7 +223,7 @@
             </div>
         </div>
     </div>
-    <script type="module" src="src/main.js?v=90"></script>
+    <script type="module" src="src/main.js?v=91"></script>
     <script src="src/launcher-return.js"></script>
 </body>
 

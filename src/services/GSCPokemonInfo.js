@@ -8,8 +8,8 @@
  * - Mail attachment
  * - Data comparison for trade verification
  */
-import { GSCUtils } from './GSCUtils.js?v=90';
-import { GSCChecks } from './GSCChecks.js?v=90';
+import { GSCUtils } from './GSCUtils.js?v=91';
+import { GSCChecks } from './GSCChecks.js?v=91';
 
 export class GSCPokemonInfo {
     // Data structure lengths
@@ -195,6 +195,39 @@ export class GSCPokemonInfo {
         this.values[GSCPokemonInfo.STATUS_POS] = 0;
     }
 
+    // PP table used by getMaxPP/setMove; RBY overrides this with its own table
+    getPpTable() {
+        return GSCUtils.movesPpList;
+    }
+
+    getMaxPP(pos) {
+        const ppUps = (this.getPP(pos) >> 6) & 3;
+        const ppTable = this.getPpTable();
+        const maxBasePp = ppTable ? (ppTable[this.getMove(pos)] || 0) : 0;
+        let ppIncrement = Math.floor(maxBasePp / 5);
+        // Base-40 moves gain only 7 per PP Up, not 8
+        if (maxBasePp === 40) {
+            ppIncrement -= 1;
+        }
+        return maxBasePp + (ppIncrement * ppUps);
+    }
+
+    healMove(pos) {
+        const ppUps = (this.getPP(pos) >> 6) & 3;
+        this.setPP(pos, this.getMaxPP(pos) | (ppUps << 6));
+    }
+
+    healMoves() {
+        for (let i = 0; i < 4; i++) {
+            this.healMove(i);
+        }
+    }
+
+    fullHeal() {
+        this.heal();
+        this.healMoves();
+    }
+
     faint() {
         this.setCurrHp(0);
         this.values[GSCPokemonInfo.STATUS_POS] = 0;
@@ -347,9 +380,12 @@ export class GSCPokemonInfo {
         return true;
     }
 
-    isEqual(other, weak = false) {
-        // Compare core data ranges (excluding moves as they're checked separately)
-        const ranges = [[0, 2], [6, 0x17], [0x1B, GSCPokemonInfo.POKEMON_DATA_LEN]];
+    isEqual(other, weak = false, allValues = false) {
+        // Compare core data ranges (excluding moves as they're checked separately);
+        // allValues compares the whole struct (Python full_equality_ranges)
+        const ranges = allValues
+            ? [[0, this.values.length]]
+            : [[0, 2], [6, 0x17], [0x1B, GSCPokemonInfo.POKEMON_DATA_LEN]];
         for (const [start, end] of ranges) {
             for (let j = start; j < end; j++) {
                 if (this.values[j] !== other.values[j]) {
