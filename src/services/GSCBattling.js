@@ -275,7 +275,10 @@ export class GSCBattling extends GSCTrading {
      * re-request every 500ms, optionally keep the console clock alive.
      * Only main-loop callers may keep-alive (single transport).
      */
-    async forceReceiveTag(tag, keepAlive = true, timeoutMs = 600000) {
+    async forceReceiveTag(tag, keepAlive = true, timeoutMs = 600000, fresh = false) {
+        if (fresh) {
+            delete this.ws.recvDict[tag];
+        }
         const deadline = Date.now() + timeoutMs;
         let lastGet = 0;
         while (!this.stopTrade && Date.now() < deadline) {
@@ -295,12 +298,12 @@ export class GSCBattling extends GSCTrading {
     }
 
     async waitForReseed(keepAlive) {
-        const data = await this.forceReceiveTag(this.MSG_RSS, keepAlive);
+        const data = await this.forceReceiveTag(this.MSG_RSS, keepAlive, 600000, true);
         return data !== null;
     }
 
     async getRandomBattle() {
-        const data = await this.forceReceiveTag(this.MSG_RAN, true);
+        const data = await this.forceReceiveTag(this.MSG_RAN, true, 600000, true);
         return data ? new Uint8Array(data) : null;
     }
 
