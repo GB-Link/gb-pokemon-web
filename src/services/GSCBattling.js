@@ -1,9 +1,11 @@
 /**
- * GSCBattling.js - Gen 2 (Gold/Silver/Crystal) Link Battle Protocol
- * trade menu is replaced by the per-turn choice exchange, and three battle
- * transfers are added on top of the trading tags:
- * - BFL2: full battle data (counter + rng echo + party + patches) for
- *   post-exchange verification
+ * GSCBattling.js - Gen 2 (Gold/Silver/Crystal) link battles.
+ *
+ * The Colosseum uses the trade machinery with different state tables; the
+ * trade menu is replaced by a per-turn choice exchange, and three transfers
+ * are added on top of the trading tags:
+ * - BFL2: full battle data (counter + rng echo + party + patches), compared
+ *   against the section exchange to detect altered data
  * - TST2: peer rendezvous before a synchronous section transfer
  * - RSS2: server RNG reseed acknowledgment
  * The 10-byte RNG section always comes from the server (both players get the
@@ -14,6 +16,7 @@ import { GSCTrading } from './GSCTrading.js?v=91';
 import { GSCUtils } from './GSCUtils.js?v=91';
 import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=91';
 import { GSCTradingData } from './GSCTradingDataUtils.js?v=91';
+import { DefaultNames } from './DefaultNames.js?v=91';
 
 export class GSCBattling extends GSCTrading {
     constructor(usb, ws, logger, tradeType = 'battle', isBuffered = false, doSanityChecks = true, options = {}) {
@@ -72,7 +75,7 @@ export class GSCBattling extends GSCTrading {
             this.POSSIBLE_INDEXES.add(i);
         }
 
-        // Shared-helper constants (Python GSCTrading class attributes)
+        // Shared wait/resend limits
         this.OPTION_CONFIRMATION_THRESHOLD = 10;
         this.RESENDS_LIMIT_TRADE = 20;
         this.MAX_CONSECUTIVE_NO_DATA = 0x100;
@@ -97,7 +100,7 @@ export class GSCBattling extends GSCTrading {
         this.battleBaseSections = null;
         this.battleTurnTimeS = options.battleTurnTime ?? 30;
 
-        // UI hooks for the inter-turn wait (Python's ENTER-to-skip prompt)
+        // UI hooks for the inter-turn wait
         this.onTurnWait = null;
         this.onTurnWaitEnd = null;
         this._turnWaitResolve = null;
@@ -110,7 +113,7 @@ export class GSCBattling extends GSCTrading {
 
     get BASE_BATTLE_PATH() { return '/data/gsc/base_battle.bin'; }
 
-    // Python utils_class hook: patch helpers must be invoked through the
+    // hook: patch helpers must be invoked through the
     // per-gen class so the late-bound patch positions resolve correctly
     get utilsClass() { return GSCUtils; }
 
@@ -133,11 +136,12 @@ export class GSCBattling extends GSCTrading {
         // Needed even without checks: noMailSection for createTradingData and
         // movesPpList for healing
         await GSCUtils.load();
+        if (this.defaultReceivedNames) await DefaultNames.load();
         await this.loadBattleBaseData();
     }
 
     /**
-     * Load the buffered-mode ghost party (Python base_no_trade = base_battle.bin).
+     * Load the ghost party used for the first pass of a buffered battle.
      */
     async loadBattleBaseData() {
         if (this.battleBaseSections) return true;
@@ -167,9 +171,8 @@ export class GSCBattling extends GSCTrading {
     }
 
     /**
-     * Python read_section applies the per-byte checks map to the peer-bound
-     * wire stream; the web applies it to the collected copy before decoding.
-     * A no-op when the checks engine has no section map (gen 1 stub).
+     * Run the per-byte sanity checks over the peer's section before it is
+     * decoded. A no-op when the checks engine has no map for the section.
      */
     sanitizePeerSection(index, wireBytes) {
         if (!this.checks.getChecker || !this.checks.applyChecksToData) return;
@@ -223,8 +226,8 @@ export class GSCBattling extends GSCTrading {
     // ==================== PREDEFINED SECTIONS (enter room / sit) ====================
 
     /**
-     * Python send_predefined_section: advance through fixed states; with
-     * dieOnNoData, 0x100 consecutive 0x00 at state 0 means the player left.
+     * Advance through a fixed sequence of states. With dieOnNoData, 0x100
+     * consecutive 0x00 replies at state 0 mean the player left the room.
      */
     async sendPredefinedSection(statesList, initialSending = 0, dieOnNoData = false) {
         let sending = initialSending;
@@ -271,8 +274,8 @@ export class GSCBattling extends GSCTrading {
     // ==================== FORCE-RECEIVE HELPERS ====================
 
     /**
-     * Python force_receive over a non-counter tag: poll the receive dict,
-     * re-request every 500ms, optionally keep the console clock alive.
+     * Block until a non-counter tag arrives: poll the receive dict and
+     * re-request every 500ms, optionally keeping the console clock alive.
      * Only main-loop callers may keep-alive (single transport).
      */
     async forceReceiveTag(tag, keepAlive = true, timeoutMs = 600000, fresh = false) {
@@ -325,8 +328,8 @@ export class GSCBattling extends GSCTrading {
     // ==================== VERSION CHECK / NEGOTIATION TAIL ====================
 
     /**
-     * Python post_buffered_negotiation_init: the reseed ack MUST come before
-     * the version check (each client's G RSS regenerates the shared seed).
+     * The reseed ack MUST be awaited before the version check: each client's
+     * reseed request regenerates the seed both players will share.
      * Runs inside the background negotiation promise - never touches USB.
      */
     async postBufferedNegotiationInit() {
@@ -349,7 +352,7 @@ export class GSCBattling extends GSCTrading {
             }
         }
         if (!this.useNewProtocol) {
-            // Python reset_client_version: withdraw our version so the peer's
+            // withdraw our version so the peer's
             // window also misses and both settle on the OLD protocol
             delete this.ws.sendDict[this.MSG_VEC];
             this.log("Using the OLD sync protocol (7-byte packets) for compatibility");
@@ -360,8 +363,8 @@ export class GSCBattling extends GSCTrading {
     // ==================== SECTION EXCHANGE ====================
 
     /**
-     * Python battle_starting_sequence: exchange the three battle sections.
-     * The RNG section is always fed buffered-style from the server seed.
+     * Exchange the three battle sections. The RNG section is always fed
+     * from the server seed rather than synced with the peer.
      */
     async battleStartingSequence(buffered, sendData = [null, null, null]) {
         this.checks.resetSpeciesItemList?.();
@@ -403,8 +406,8 @@ export class GSCBattling extends GSCTrading {
         }
         const otherParty = new Uint8Array(!buffered ? this.peerPartyData : sendData[1]);
         const otherPatch = new Uint8Array(!buffered ? this.peerPatchData : sendData[2]);
-        // Python runs the per-byte checks map over the peer-bound stream; the
-        // BFL verification then catches any data the checks had to fix
+        // Any byte the checks have to fix here will differ from the peer's
+        // BFL copy, which is what aborts a tampered battle
         this.sanitizePeerSection(1, otherParty);
         this.sanitizePeerSection(2, otherPatch);
         this.utilsClass.applyPatches(otherParty, otherPatch, false);
@@ -420,7 +423,7 @@ export class GSCBattling extends GSCTrading {
     }
 
     /**
-     * Python synchronous_trade (battles reuse it unchanged via the rename trick).
+     * (battles reuse it unchanged via the rename trick).
      */
     async synchronousBattle() {
         let data, dataOther;
@@ -436,8 +439,8 @@ export class GSCBattling extends GSCTrading {
     }
 
     /**
-     * Python buffered_trade: non-blocking peer-FLL check with the base_battle
-     * ghost fallback, then send our real party back as FLL.
+     * Non-blocking check for the peer's data, falling back to the ghost
+     * party, then send our real party back as FLL.
      */
     async bufferedBattle() {
         this.checks.doSanityChecks = this.doSanityChecks;
@@ -490,8 +493,8 @@ export class GSCBattling extends GSCTrading {
     }
 
     /**
-     * Python send_big_trading_data: our full data (all sections concatenated)
-     * for the peer's buffered pass. No counter on FLL.
+     * Our full data, all sections concatenated, for the peer's buffered
+     * pass. FLL carries no counter.
      */
     sendBattleFllData() {
         const sections = this.ownPokemon.createTradingData();
@@ -510,8 +513,8 @@ export class GSCBattling extends GSCTrading {
     // ==================== BFL (post-exchange verification) ====================
 
     /**
-     * Python send_big_battle_trading_data: counter + rng echo + party + patches
-     * (+ the gen 2 no-mail block that createTradingData always appends).
+     * Send counter + rng echo + party + patches (plus the gen 2 no-mail
+     * block that createTradingData always appends).
      */
     sendBigBattleTradingData() {
         const sections = this.ownPokemon.createTradingData();
@@ -539,8 +542,8 @@ export class GSCBattling extends GSCTrading {
     }
 
     /**
-     * Python player_battle's success check: the rng echo must match the server
-     * seed and every mon must byte-equal what the section exchange produced.
+     * The peer's echoed seed must match ours and every mon must byte-equal
+     * what the section exchange produced.
      */
     verifyBattleData(otherFull) {
         const rngEcho = otherFull[0];
@@ -589,8 +592,8 @@ export class GSCBattling extends GSCTrading {
     }
 
     /**
-     * Python is_move_unpredictable: moves that can force switches (or copy
-     * ones that do) make the opponent's active mon unknowable. null = error.
+     * Moves that can force a switch, or copy ones that do, make the
+     * opponent's active mon unknowable. null means the state is invalid.
      */
     isMoveUnpredictable(mon, moveIndex, battleData) {
         if (moveIndex === this.CHOICE_STRUGGLE_ID) return false;
@@ -634,8 +637,8 @@ export class GSCBattling extends GSCTrading {
     }
 
     /**
-     * Python update_battle_information: track both active mons; a switch-forcing
-     * move makes the OPPOSITE side's active mon unknown until it's seen again.
+     * Track both active mons. A switch-forcing move makes the OPPOSITE
+     * side's active mon unknown until it is seen again.
      */
     updateBattleInformation(sentChoice, receivedChoice) {
         const lastTurnOwnMon = this.currOwnMonIndex;
@@ -675,12 +678,11 @@ export class GSCBattling extends GSCTrading {
         }
     }
 
-    // ==================== WAIT PRIMITIVES (faithful ports) ====================
+    // ==================== WAIT PRIMITIVES ====================
 
     /**
-     * Python wait_for_set_of_values: a value only counts once it repeats for
-     * threshold consecutive reads. threshold 0 = accept the first hit
-     * (including 0x00 when breakOnNoData).
+     * A value only counts once it repeats for threshold consecutive reads.
+     * threshold 0 accepts the first hit (including 0x00 when breakOnNoData).
      */
     async waitForSetOfValues(next, values, breakOnNoData = false, threshold = null) {
         let foundVal = next;
@@ -708,8 +710,8 @@ export class GSCBattling extends GSCTrading {
     }
 
     /**
-     * Python timed_wait_for_set_of_values. Note the threshold-0 special mode
-     * differs from the untimed one: instant accept only for in-set values.
+     * Timed variant. Its threshold-0 mode differs from the untimed one:
+     * only an in-set value is accepted instantly.
      */
     async timedWaitForSetOfValues(next, values, { timeoutMs = 1000, breakOnNoData = false, threshold = null } = {}) {
         const start = Date.now();
@@ -747,7 +749,7 @@ export class GSCBattling extends GSCTrading {
     }
 
     /**
-     * Python timed_wait_for_no_input (ignores the passed value on entry).
+     * (ignores the passed value on entry).
      */
     async timedWaitForNoInput(next, timeoutMs = 1000) {
         next = this.NO_INPUT + 1;
@@ -775,9 +777,8 @@ export class GSCBattling extends GSCTrading {
     }
 
     /**
-     * Python GSCBattlingClient.get_chosen_option: the opponent's choice with a
-     * validity flag from the move/mon sanity checks. Invalid only warns
-     * (matching the reference), it does not end the battle.
+     * The opponent's choice plus a validity flag from the move/mon sanity
+     * checks. An invalid choice only warns; it does not end the battle.
      */
     async getChosenOption() {
         const data = await this.getCounterMessage(this.MSG_CHC);
@@ -860,7 +861,7 @@ export class GSCBattling extends GSCTrading {
     // ==================== THE PER-TURN LOOP ====================
 
     /**
-     * Python do_battle (2-player path).
+     * (2-player path).
      */
     async doBattle(close = false) {
         this.initialSitPosition = 0;
@@ -991,14 +992,13 @@ export class GSCBattling extends GSCTrading {
 
     // ==================== SESSION ENTRY ====================
 
-    // AppUI drives every protocol through startTrade() (Python player_trade
-    // -> player_battle rename trick)
+    // AppUI drives every protocol through startTrade()
     async startTrade() {
         return this.startBattle();
     }
 
     /**
-     * Python player_battle.
+     * Enter the room, then battle until the player leaves it.
      */
     async startBattle() {
         this.log(`Starting ${this.GEN_NAME} Battle Protocol (${this.isBuffered ? 'buffered' : 'sync'}, sanity checks: ${this.doSanityChecks})...`);
@@ -1013,7 +1013,7 @@ export class GSCBattling extends GSCTrading {
         this.hasGhosted = false;
 
         // 4.1 behavior: send the client version immediately; the check itself
-        // runs after the reseed ack (Python post_buffered_negotiation_init)
+        // runs after the reseed ack
         this.ws.sendData(this.MSG_VEC, this.versionData());
 
         // Pre-populate + early-send the buffered preference so the peer's
@@ -1053,7 +1053,7 @@ export class GSCBattling extends GSCTrading {
                     this.log("Waiting for mode negotiation and the server handshake...");
                     const pending = negotiationPromise;
                     negotiationPromise = null;
-                    // Python force_receive: keep the console clock running
+                    // keep the console clock running
                     // while the negotiation thread finishes
                     let negotiationSettled = false;
                     let negotiationError = null;

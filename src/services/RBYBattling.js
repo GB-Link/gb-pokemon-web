@@ -1,6 +1,8 @@
 /**
- * Extends GSCBattling (NOT RBYTrading), mirroring the reference class layout:
- * gen 1 tags/state tables/section lengths/choice bytes are re-declared here.
+ * RBYBattling.js - Gen 1 (Red/Blue/Yellow) link battles.
+ *
+ * Extends GSCBattling (not RBYTrading), so the gen 1 tags, state tables,
+ * section lengths and choice bytes are re-declared here.
  * Gen 1 differences: no inter-turn polling suspension (canDropCommands=false),
  * a 0x6D "no move possible" choice (Wrap/Bind), no unpredictable moves, the
  * ghost party gets healed, and the battle-end probe waits for 0xFD.
@@ -9,6 +11,7 @@
 import { GSCBattling } from './GSCBattling.js?v=91';
 import { RBYUtils } from './RBYUtils.js?v=91';
 import { RBYTradingData, RBYChecks } from './RBYTradingDataUtils.js?v=91';
+import { DefaultNames } from './DefaultNames.js?v=91';
 
 export class RBYBattling extends GSCBattling {
     constructor(usb, ws, logger, tradeType = 'battle', isBuffered = false, doSanityChecks = true, options = {}) {
@@ -93,6 +96,12 @@ export class RBYBattling extends GSCBattling {
 
     get GEN_NAME() { return 'RBY'; }
 
+    get nameUtilsClass() { return RBYUtils; }
+
+    get NAME_LAYOUT() {
+        return { gen: 1, nicknamePos: 0x15D, otPos: 0x11B, speciesListPos: 0x0C, partySizePos: 0x0B, nameLength: 0x0B, trainerNamePos: 0x00 };
+    }
+
     createPartyReader(partyBytes) {
         return new RBYTradingData(partyBytes);
     }
@@ -101,17 +110,18 @@ export class RBYBattling extends GSCBattling {
         if (this.doSanityChecks && this.checks.load) {
             await this.checks.load();
         }
-        // Gen 1 healing needs its own PP table; RBYUtils inherits the GSC
-        // static, so the gen 1 table must shadow it explicitly
+        // RBYUtils inherits the gen 2 PP table, so the gen 1 one must
+        // be loaded onto it explicitly before healing
         if (!Object.prototype.hasOwnProperty.call(RBYUtils, 'movesPpList') || !RBYUtils.movesPpList) {
             RBYUtils.movesPpList = await RBYUtils.loadBinaryFile('moves_pp_list.bin');
         }
+        if (this.defaultReceivedNames) await DefaultNames.load();
         await this.loadBattleBaseData();
     }
 
     /**
-     * Python RBYBattling.get_user_choice: on no-data, give the game a 6s
-     * window to come back before treating it as a close.
+     * On no-data, give the game a 6s window to come back before treating
+     * it as the player closing the battle.
      */
     async getUserChoice() {
         while (!this.stopTrade) {

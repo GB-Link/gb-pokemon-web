@@ -3,6 +3,7 @@ import { TradingProtocol } from './TradingProtocol.js?v=91';
 import { GSCUtils } from './GSCUtils.js?v=91';
 import { GSCChecks } from './GSCChecks.js?v=91';
 import { GSCJPMailConverter } from './GSCJPMailConverter.js?v=91';
+import { DefaultNames } from './DefaultNames.js?v=91';
 
 export class GSCTrading extends TradingProtocol {
     constructor(usb, ws, logger, tradeType = 'pool', isBuffered = false, doSanityChecks = true, options = {}) {
@@ -18,6 +19,8 @@ export class GSCTrading extends TradingProtocol {
         this.crashOnSyncDrop = options.crashOnSyncDrop ?? true;
         this.maxLevel = options.maxLevel ?? 100;
         this.convertToEggs = options.convertToEggs ?? false;
+        // Received Pokemon get the default species name of this game's language
+        this.defaultReceivedNames = options.defaultReceivedNames ?? false;
 
         // Negotiation prompt callback - called when user needs to decide whether to switch modes
         // Should return a Promise that resolves to true (switch) or false (keep)
@@ -184,6 +187,113 @@ export class GSCTrading extends TradingProtocol {
         return false;
     }
 
+    // Utils class carrying this generation's patch-set offsets
+    get nameUtilsClass() { return GSCUtils; }
+
+    // Party section layout used for received-name defaults (RBY overrides)
+    get NAME_LAYOUT() {
+        return { gen: 2, nicknamePos: 0x177, otPos: 0x135, speciesListPos: 0x0C, partySizePos: 0x0B, nameLength: 0x0B, trainerNamePos: 0x00 };
+    }
+
+    /**
+     * Default nickname field for a slot of a party section (peer's party),
+     * from the Gen3-to-Gen-X derivation for this game's language.
+     */
+    defaultNameFieldForSlot(partyBytes, slot) {
+        const L = this.NAME_LAYOUT;
+        const listEntry = partyBytes[L.speciesListPos + slot];
+        const isEgg = L.gen === 2 && listEntry === GSCUtils.EGG_ID;
+        return DefaultNames.getDefaultNameField(L.gen, listEntry, isEgg, this.isJapanese);
+    }
+
+    /**
+     * Rewrite every nickname of a party section to the default species name.
+     * Used for the buffered/pool feed paths (in place, idempotent).
+     */
+    applyDefaultNicknames(partyBytes) {
+        if (!this.defaultReceivedNames || !DefaultNames.loaded || !partyBytes) return partyBytes;
+        const L = this.NAME_LAYOUT;
+        // the peer's trainer name is shown in the trade/battle screens, so it
+        // gets this game's default trainer name ("TRAINER")
+        partyBytes.set(DefaultNames.getDefaultTrainerNameField(this.isJapanese), L.trainerNamePos);
+        const partySize = Math.min(Math.max(partyBytes[L.partySizePos] || 0, 0), 6);
+        const otField = DefaultNames.getDefaultTrainerNameField(this.isJapanese);
+        for (let slot = 0; slot < partySize; slot++) {
+            partyBytes.set(this.defaultNameFieldForSlot(partyBytes, slot), L.nicknamePos + slot * L.nameLength);
+            partyBytes.set(otField, L.otPos + slot * L.nameLength);
+        }
+        return partyBytes;
+    }
+
+    isNicknamePos(pos) {
+        const L = this.NAME_LAYOUT;
+        if (pos >= L.trainerNamePos && pos < L.trainerNamePos + L.nameLength) return true;
+        if (pos >= L.otPos && pos < L.otPos + 6 * L.nameLength) return true;
+        return pos >= L.nicknamePos && pos < L.nicknamePos + 6 * L.nameLength;
+    }
+
+    neutralizeNicknamePatches(patchBytes) {
+        if (!this.defaultReceivedNames || !patchBytes) return patchBytes;
+        const U = this.nameUtilsClass;
+        const [num, idx] = U.getPatchSetNumIndex(false, false);
+        let base = U.patch_set_base_pos[idx];
+        let remaining = num;
+        for (let i = U.patch_set_start_info_pos[idx]; i < patchBytes.length && remaining > 0; i++) {
+            const entry = patchBytes[i];
+            if (entry === 0xFF) {
+                remaining--;
+                base += 0xFC;
+            } else if (entry > 0 && this.isNicknamePos(entry + base - 1)) {
+                patchBytes[i] = 0x00;
+            }
+        }
+        return patchBytes;
+    }
+
+    /**
+     * Sync-mode counterpart: substitute a peer party byte as it is fed to the
+     * device (nickname positions only).
+     */
+    peerFeedByte(index, pos, byte, otherBuf) {
+        if (!this.defaultReceivedNames || !DefaultNames.loaded) return byte;
+        if (index === 2) return this.peerPatchFeedByte(pos, byte, otherBuf);
+        if (index !== 1) return byte;
+        const L = this.NAME_LAYOUT;
+        if (pos >= L.trainerNamePos && pos < L.trainerNamePos + L.nameLength) {
+            const sub = DefaultNames.getDefaultTrainerNameField(this.isJapanese)[pos - L.trainerNamePos];
+            return sub === this.NO_INPUT ? 0xFF : sub;
+        }
+        if (pos >= L.otPos && pos < L.otPos + 6 * L.nameLength) {
+            const sub = DefaultNames.getDefaultTrainerNameField(this.isJapanese)[(pos - L.otPos) % L.nameLength];
+            return sub === this.NO_INPUT ? 0xFF : sub;
+        }
+        if (pos < L.nicknamePos) return byte;
+        const slot = Math.floor((pos - L.nicknamePos) / L.nameLength);
+        if (slot >= 6 || slot >= Math.min(otherBuf[L.partySizePos] || 0, 6)) return byte;
+        const sub = this.defaultNameFieldForSlot(otherBuf, slot)[(pos - L.nicknamePos) % L.nameLength];
+        // 0xFE is the NO_INPUT control code and never legal device-bound data
+        return sub === this.NO_INPUT ? 0xFF : sub;
+    }
+
+    /**
+     * Streaming counterpart of neutralizeNicknamePatches: the block base is
+     * recovered by counting the 0xFF separators already received.
+     */
+    peerPatchFeedByte(pos, byte, otherBuf) {
+        const U = this.nameUtilsClass;
+        const [num, idx] = U.getPatchSetNumIndex(false, false);
+        const start = U.patch_set_start_info_pos[idx];
+        if (pos < start || byte === 0xFF || byte === 0) return byte;
+        let base = U.patch_set_base_pos[idx];
+        let separators = 0;
+        for (let i = start; i < pos && i < otherBuf.length; i++) {
+            if (otherBuf[i] === 0xFF) separators++;
+        }
+        if (separators >= num) return byte;
+        base += separators * 0xFC;
+        return this.isNicknamePos(byte + base - 1) ? 0x00 : byte;
+    }
+
     /**
      * Wait for peer to connect in link trade mode.
      * Server sends "CLIENT" message when both players are in the room.
@@ -194,7 +304,6 @@ export class GSCTrading extends TradingProtocol {
         // Send empty message to trigger server to check for pairing
         this.ws.sendRaw(new Uint8Array(0));
 
-        // Capture MSG_BUF for use in closures (arrow functions preserve 'this', but let's be explicit)
         const msgBuf = this.MSG_BUF;
 
         // ref impl doesn't send "CLIENT", but we know peer is connected when we receive their buffered data
@@ -235,7 +344,7 @@ export class GSCTrading extends TradingProtocol {
 
             this.ws.ws.addEventListener('message', checkMessage);
 
-            // ALSO poll for buffered data - ref impl sends it but we need to GET it
+            // The peer only sends its buffered data once, so poll with GETs
             const pollInterval = setInterval(() => {
                 this.ws.sendGetData(msgBuf);
                 if (this.ws.recvDict[msgBuf]) {
@@ -2326,6 +2435,7 @@ export class GSCTrading extends TradingProtocol {
 
         // Load Pokemon names for potential cross-version nickname replacement
         await GSCUtils.loadPokemonNames();
+        if (this.defaultReceivedNames) await DefaultNames.load();
 
         // Initialize blank trade flags for data exchange tracking
         this.ownBlankTrade = true;
@@ -3071,7 +3181,8 @@ export class GSCTrading extends TradingProtocol {
                 if (bytesOffset < bytesOffsetTarget) {
                     schedule = true;
                 } else if (posRecv > iFeed) {
-                    byteToConsole = otherBuf[iFeed];
+                    byteToConsole = this.peerFeedByte(index, iFeed, otherBuf[iFeed], otherBuf);
+                    otherBuf[iFeed] = byteToConsole;
                     if (posRecv > (iFeed + SAFETY_AMOUNT)) schedule = true;
                     if (schedule) {
                         iFeed++;
@@ -3196,7 +3307,7 @@ export class GSCTrading extends TradingProtocol {
                     // Python prevent_no_input semantics: the peer's GB sends its
                     // bytes raw; the receiver converts 0xFE (NO_INPUT control code)
                     // to 0xFF before feeding the GB.
-                    const cleanByte = (peerByte === 0xFE) ? 0xFF : peerByte;
+                    const cleanByte = this.peerFeedByte(index, i, (peerByte === 0xFE) ? 0xFF : peerByte, otherBuf);
 
                     const nextI = i + 1;
                     const fill = fillers[nextI];
@@ -3325,21 +3436,8 @@ export class GSCTrading extends TradingProtocol {
      * Sends the entire trade data (Random + Party + Patch + Mail) in one FLL2 packet.
      */
     async sendBigTradingData(randomData, tradeData) {
-        // Construct single byte array
-        // Order: [Random(10), Party(0x1BC), Patch(0x1BC), Mail(0x1BC)]
-        // NOTE: ref impl create_trading_data returns [random, party, mail]. 
-        // But send_big_trading_data takes [random, party, data_mail, mail_data_other?].
-        // Wait, send_big_trading_data just iterates the list it gets.
-        // And buffered_trade calls: coms.send_big_trading_data(own_pokemon.create_trading_data())
-        // create_trading_data returns [random, party, mail].
-        // So the list has 3 elements?
-        // Let's look at special_sections_len: [10, 444, 444, 444].
-        // So we should send 3 or 4 sections?
-        // Logic in gsc_trading.py: "send_data[3] = self.convert_mail_data(send_data[3], True)"
-        // If create_trading_data returns 3 items, but special_sections_len has 4...
-        // We need to match what ref impl expects.
-        // get_big_trading_data splits by lengths.
-
+        // The receiver splits the payload by SPECIAL_SECTIONS_LEN, so every
+        // section is sent at full length and in order.
         const totalSize = this.SPECIAL_SECTIONS_LEN.reduce((a, b) => a + b, 0);
         const fullData = new Uint8Array(totalSize);
         let offset = 0;
@@ -3405,6 +3503,13 @@ export class GSCTrading extends TradingProtocol {
     async readSection(index, dataToSend, skipSync = false) {
         const length = this.getSectionLength(index);
         const sectionFillers = this.SECTION_FILLERS?.[index] || {};
+        if (this.defaultReceivedNames && (index === 1 || index === 2)) {
+            const fix = index === 1
+                ? (b) => this.applyDefaultNicknames(b)
+                : (b) => this.neutralizeNicknamePatches(b);
+            if (this.bufferedOtherData?.[index]) fix(this.bufferedOtherData[index]);
+            if (dataToSend) dataToSend = fix(new Uint8Array(dataToSend));
+        }
 
         // ==================== 1. BUFFERED MODE (ASYNC) ====================
         // Only use buffered mode if we HAVE the peer's data (Pass 2)
@@ -3413,31 +3518,9 @@ export class GSCTrading extends TradingProtocol {
 
         if (useBufferedRead) {
 
+            // The preamble below runs in buffered mode too; the peer's cached
+            // bytes are fed to the device after it.
             this.log(`Buffered Read Section ${index}: Using local data from FLL2 buffer.`);
-            const receivedData = new Uint8Array(length);
-            const peerSectionData = this.bufferedOtherData[index];
-
-            // In buffered mode, valid data is clean (no fillers/sync bytes).
-            // We feed it to the GB byte-by-byte.
-
-            // Initial Byte (GB sends something, we ignore/store it, and send peer's first byte)
-            // ref impl 'read_section' logic for buffered:
-            // It sends 'send_data[i]' to GB.
-
-            // Start the loop. We need to wake it up?
-            // "if buffered... buf = [next]" (where next is what GB sent).
-
-            // Note: Buffered mode in ref impl handles preamble implicitly or explicitly?
-            // `read_section`:
-            // `if self.is_buffered: ...`
-            // It does NOT do the preamble 0xFD loop if using the generic `read_section` implementation?
-            // Wait, `read_section` calls `synch_synch_section` ONLY if `not buffered`.
-            // But does it do Preamble?
-            // Yes, preamble is generic (lines 1326-1335 in gsc_trading.py).
-            // "while next != starter..." and "while next == starter..."
-            // SO PREAMBLE MUST HAPPEN IN BUFFERED MODE TOO!
-
-            // Let's implement Preamble for Buffered Mode too.
         }
 
         // ==================== SHARED PREAMBLE (Wake up GB) ====================

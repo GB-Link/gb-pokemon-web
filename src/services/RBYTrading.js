@@ -12,6 +12,7 @@
 import { GSCTrading } from './GSCTrading.js?v=91';
 import { RBYUtils } from './RBYUtils.js?v=91';
 import { RBYTradingData, RBYChecks } from './RBYTradingDataUtils.js?v=91';
+import { DefaultNames } from './DefaultNames.js?v=91';
 
 export class RBYTrading extends GSCTrading {
     constructor(usb, ws, logger, tradeType = 'pool', isBuffered = false, doSanityChecks = true, options = {}) {
@@ -132,6 +133,8 @@ export class RBYTrading extends GSCTrading {
             await RBYUtils.loadDefaultPartyData();
         }
 
+        if (this.defaultReceivedNames) await DefaultNames.load();
+
         // Initialize blank trade flags
         this.ownBlankTrade = true;
         this.otherBlankTrade = true;
@@ -228,6 +231,12 @@ export class RBYTrading extends GSCTrading {
     get MSG_VES() { return "VES1"; }
     get MSG_RAN() { return "RAN1"; }
     get MSG_ASK() { return "ASK1"; }
+
+    get nameUtilsClass() { return RBYUtils; }
+
+    get NAME_LAYOUT() {
+        return { gen: 1, nicknamePos: 0x15D, otPos: 0x11B, speciesListPos: 0x0C, partySizePos: 0x0B, nameLength: 0x0B, trainerNamePos: 0x00 };
+    }
 
     // ==================== OVERRIDE METHODS ====================
 

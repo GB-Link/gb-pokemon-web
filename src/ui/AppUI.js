@@ -51,12 +51,14 @@ export class AppUI {
             btnSaveSettings: document.getElementById('btn-save-settings'),
             settingServerUrl: document.getElementById('setting-server-url'),
             settingJapanese: document.getElementById('setting-japanese'),
+            settingDefaultNames: document.getElementById('setting-default-names'),
             settingSanityChecks: document.getElementById('setting-sanity-checks'),
             settingVerbose: document.getElementById('setting-verbose'),
             settingDarkMode: document.getElementById('setting-dark-mode'),
             settingBuffered: document.getElementById('setting-buffered'),
             settingCrashSync: document.getElementById('setting-crash-sync'),
             settingBattleTurnTime: document.getElementById('setting-battle-turn-time'),
+            settingBattleNames: document.getElementById('setting-battle-names'),
             battleWaitCard: document.getElementById('battle-wait-card'),
             battleWaitText: document.getElementById('battle-wait-text'),
             btnBattleSkipWait: document.getElementById('btn-battle-skip-wait'),
@@ -140,10 +142,11 @@ export class AppUI {
         });
 
         const settingInputs = [
-            this.elements.settingServerUrl, this.elements.settingJapanese,
+            this.elements.settingServerUrl, this.elements.settingJapanese, this.elements.settingDefaultNames,
             this.elements.settingSanityChecks, this.elements.settingVerbose,
             this.elements.settingDarkMode, this.elements.settingBuffered,
             this.elements.settingCrashSync, this.elements.settingBattleTurnTime,
+            this.elements.settingBattleNames,
             this.elements.settingMaxLevel,
             this.elements.settingMaxLevelSlider, this.elements.settingConvertEggs
         ];
@@ -171,12 +174,14 @@ export class AppUI {
         const s = this.settings.getAll();
         this.elements.settingServerUrl.value = s.serverUrl;
         this.elements.settingJapanese.checked = s.isJapanese;
+        this.elements.settingDefaultNames.checked = s.defaultReceivedNames;
         this.elements.settingSanityChecks.checked = s.doSanityChecks;
         this.elements.settingVerbose.checked = s.verbose;
         this.elements.settingDarkMode.checked = s.darkMode;
         this.elements.settingBuffered.checked = s.isBuffered;
         this.elements.settingCrashSync.checked = s.crashOnSyncDrop;
         this.elements.settingBattleTurnTime.value = s.battleTurnTime;
+        this.elements.settingBattleNames.checked = s.defaultBattleNames;
         this.elements.settingMaxLevel.value = s.maxLevel;
         this.elements.settingMaxLevelSlider.value = s.maxLevel;
         this.elements.settingConvertEggs.checked = s.convertToEggs;
@@ -186,6 +191,7 @@ export class AppUI {
     saveSettings() {
         this.settings.set('serverUrl', this.elements.settingServerUrl.value.trim());
         this.settings.set('isJapanese', this.elements.settingJapanese.checked);
+        this.settings.set('defaultReceivedNames', this.elements.settingDefaultNames.checked);
         this.settings.set('doSanityChecks', this.elements.settingSanityChecks.checked);
         this.settings.set('verbose', this.elements.settingVerbose.checked);
         this.settings.set('darkMode', this.elements.settingDarkMode.checked);
@@ -193,6 +199,7 @@ export class AppUI {
         this.settings.set('crashOnSyncDrop', this.elements.settingCrashSync.checked);
         const battleTurnTime = Math.max(0, parseInt(this.elements.settingBattleTurnTime.value) || 0);
         this.settings.set('battleTurnTime', battleTurnTime);
+        this.settings.set('defaultBattleNames', this.elements.settingBattleNames.checked);
         this.elements.settingBattleTurnTime.value = battleTurnTime;
         const maxLevel = Math.max(5, Math.min(100, parseInt(this.elements.settingMaxLevel.value) || 100));
         this.settings.set('maxLevel', maxLevel);
@@ -210,12 +217,14 @@ export class AppUI {
         const mappings = {
             'serverUrl': this.elements.settingServerUrl.value,
             'isJapanese': this.elements.settingJapanese.checked,
+            'defaultReceivedNames': this.elements.settingDefaultNames.checked,
             'doSanityChecks': this.elements.settingSanityChecks.checked,
             'verbose': this.elements.settingVerbose.checked,
             'darkMode': this.elements.settingDarkMode.checked,
             'isBuffered': this.elements.settingBuffered.checked,
             'crashOnSyncDrop': this.elements.settingCrashSync.checked,
             'battleTurnTime': Math.max(0, parseInt(this.elements.settingBattleTurnTime.value) || 0),
+            'defaultBattleNames': this.elements.settingBattleNames.checked,
             'maxLevel': parseInt(this.elements.settingMaxLevel.value) || 100,
             'convertToEggs': this.elements.settingConvertEggs.checked
         };
@@ -592,6 +601,7 @@ export class AppUI {
                 verbose: this.settings.get('verbose'),
                 crashOnSyncDrop: this.settings.get('crashOnSyncDrop'),
                 battleTurnTime: this.settings.get('battleTurnTime'),
+                defaultReceivedNames: this.settings.get('defaultBattleNames'),
                 negotiationPrompt: (peerMode) => this.showNegotiationPrompt(peerMode)
             };
             this.protocol = (gen === '1')
@@ -603,6 +613,7 @@ export class AppUI {
             this.protocol = new RBYTrading(this.usb, this.ws, (msg) => this.log(msg),
                 tradeType, isBuffered, doSanityChecks, {
                 isJapanese: this.settings.get('isJapanese'),
+                defaultReceivedNames: this.settings.get('defaultReceivedNames'),
                 verbose: this.settings.get('verbose'),
                 maxLevel: this.settings.get('maxLevel'),
                 crashOnSyncDrop: this.settings.get('crashOnSyncDrop'),
@@ -614,6 +625,7 @@ export class AppUI {
                 this.protocol = new RBYTrading(this.usb, this.ws, (msg) => this.log(msg),
                     tradeType, isBuffered, doSanityChecks, {
                     isJapanese: this.settings.get('isJapanese'),
+                    defaultReceivedNames: this.settings.get('defaultReceivedNames'),
                     verbose: this.settings.get('verbose'),
                     maxLevel: this.settings.get('maxLevel'),
                     crashOnSyncDrop: this.settings.get('crashOnSyncDrop'),
@@ -623,6 +635,7 @@ export class AppUI {
                 this.protocol = new GSCTrading(this.usb, this.ws, (msg) => this.log(msg),
                     tradeType, isBuffered, doSanityChecks, {
                     isJapanese: this.settings.get('isJapanese'),
+                    defaultReceivedNames: this.settings.get('defaultReceivedNames'),
                     verbose: this.settings.get('verbose'),
                     crashOnSyncDrop: this.settings.get('crashOnSyncDrop'),
                     maxLevel: this.settings.get('maxLevel'),

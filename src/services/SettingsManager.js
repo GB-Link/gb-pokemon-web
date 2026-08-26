@@ -11,6 +11,7 @@ export class SettingsManager {
         // General Options
         serverUrl: 'wss://pokemon-gb-online-trades.herokuapp.com',
         isJapanese: false,
+        defaultReceivedNames: false,
         doSanityChecks: true,
         verbose: false,
         darkMode: true,
@@ -19,6 +20,7 @@ export class SettingsManager {
         isBuffered: false,
         crashOnSyncDrop: true,
         battleTurnTime: 30,
+        defaultBattleNames: true,
 
         // Pool Trade Options
         maxLevel: 100,
