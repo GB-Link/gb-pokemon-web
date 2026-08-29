@@ -208,7 +208,7 @@ export class PoolData {
             ivs: Array.isArray(ivs) ? ['HP', 'Attack', 'Defense', 'Speed', 'Sp. Attack', 'Sp. Defense'].map((n, i) => [n, ivs[i]]).filter(x => x[1] !== undefined) : [],
             exp: mon.getExp ? mon.getExp() : 0,
             item: itemId ? { id: itemId, name: PoolNames.itemNameForGen(3, itemId) } : null,
-            nature: mon.getNature ? mon.getNature() : null,
+            nature: mon.getNature ? PoolNames.natureDescription(mon.getNature()) : null,
             isEgg,
             isShiny: !isEgg && this.shinyGen3(e),
         };

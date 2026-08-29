@@ -23,6 +23,8 @@ export class PoolNames {
     static itemNames = null;
     static dexConversion = null;
     static itemGen12To3 = null;
+    static natureNames = null;
+    static natureStats = null;
 
     static async load() {
         if (this.loaded) return true;
@@ -36,7 +38,10 @@ export class PoolNames {
             fetchBin('text_gen3_to_general_int.bin'), fetchBin('move_names.bin'),
             fetchBin('item_names.bin'), fetchBin('dex_conversion.bin'),
         ]);
-        this.itemGen12To3 = await fetchBin('item_gen12_to_3.bin');
+        [this.itemGen12To3, this.natureNames, this.natureStats] = await Promise.all([
+            fetchBin('item_gen12_to_3.bin'), fetchBin('nature_names.bin'),
+            fetchBin('pokemon_natures.bin'),
+        ]);
         this.loaded = true;
         return true;
     }
@@ -99,6 +104,38 @@ export class PoolNames {
         if (pos + 1 >= this.itemGen12To3.length) return null;
         const mapped = this.itemGen12To3[pos] | (this.itemGen12To3[pos + 1] << 8);
         return (mapped === 0xFFFF || !mapped) ? null : this.itemName(mapped);
+    }
+
+    // Order of pokemon_natures.bin's stat ids, which is not the order the
+    // Gen 3 stat block itself uses (there Speed comes before the special stats)
+    static NATURE_STAT_NAMES = ['HP', 'Attack', 'Defense', 'Sp. Attack', 'Sp. Defense', 'Speed'];
+
+    /** Nature name for an index, i.e. Gen 3's PID modulo 25. */
+    static natureName(index) {
+        if (!this.loaded || index === null || index === undefined) return null;
+        return this.asciiText(this.natureNames, DefaultNames.getTablePointer(this.natureNames, index)) || null;
+    }
+
+    /**
+     * The stats a nature raises and lowers, as names. Null for the five
+     * neutral natures, which raise and lower the same stat.
+     */
+    static natureStatEffect(index) {
+        if (!this.loaded || index === null || index === undefined) return null;
+        const pos = index * 2;
+        if (pos + 1 >= this.natureStats.length) return null;
+        const boosted = this.natureStats[pos];
+        const nerfed = this.natureStats[pos + 1];
+        if (boosted === nerfed) return null;
+        return { boosted: this.NATURE_STAT_NAMES[boosted], nerfed: this.NATURE_STAT_NAMES[nerfed] };
+    }
+
+    /** Nature as shown in the pool, e.g. "Adamant (+Attack, -Sp. Attack)". */
+    static natureDescription(index) {
+        const name = this.natureName(index);
+        if (!name) return null;
+        const effect = this.natureStatEffect(index);
+        return effect ? `${name} (+${effect.boosted}, \u2212${effect.nerfed})` : name;
     }
 
     /** Gen 1 stores internal species ids; everything else wants the dex number. */
