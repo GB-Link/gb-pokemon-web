@@ -9,7 +9,7 @@
 
 import { PoolNames } from './PoolNames.js?v=91';
 import { GSCUtils } from './GSCUtils.js?v=91';
-import { RSESPUtils } from './RSESPUtils.js?v=91';
+import { RSESPUtils, RSESPTradingPokemonInfo } from './RSESPUtils.js?v=91';
 import { RSESPChecks } from './RSESPChecks.js?v=91';
 
 export class PoolData {
@@ -176,6 +176,12 @@ export class PoolData {
         };
     }
 
+    static gen3Stats(entry) {
+        const dv = new DataView(entry.buffer, entry.byteOffset);
+        const labels = ['HP', 'Attack', 'Defense', 'Speed', 'Sp. Attack', 'Sp. Defense'];
+        return labels.map((name, i) => [name, dv.getUint16(RSESPTradingPokemonInfo.STATS_POS + i * 2, true)]);
+    }
+
     static decodeGen3(e, slot) {
         const parsed = RSESPUtils.singleMonFromData(this.rseChecks || new RSESPChecks(), e);
         if (!parsed) return null;
@@ -189,11 +195,12 @@ export class PoolData {
             slot, gen: 3, national,
             speciesName: PoolNames.speciesName(isEgg ? PoolNames.EGG_SPECIES : (mon.getMonIndex ? mon.getMonIndex() : species)),
             hatchName: isEgg ? PoolNames.speciesName(mon.getMonIndex ? mon.getMonIndex() : species) : null,
-            nickname: '', otName: '',
-            otId: null,
+            nickname: PoolNames.gen3Text(e, RSESPTradingPokemonInfo.NICKNAME_POS, RSESPTradingPokemonInfo.NICKNAME_LEN),
+            otName: PoolNames.gen3Text(e, RSESPTradingPokemonInfo.OT_NAME_POS, RSESPTradingPokemonInfo.OT_NAME_LEN),
+            otId: (new DataView(e.buffer, e.byteOffset)).getUint16(RSESPTradingPokemonInfo.OT_ID_POS, true),
             level: mon.getLevel ? mon.getLevel() : 0,
             currHp: mon.getCurrHp ? mon.getCurrHp() : 0,
-            stats: mon.getMaxHp ? [['HP', mon.getMaxHp()]] : [],
+            stats: this.gen3Stats(e),
             moves: [0, 1, 2, 3].map(i => {
                 const id = mon.getMove ? mon.getMove(i) : 0;
                 return { id, name: PoolNames.moveName(id), pp: mon.getPP ? mon.getPP(i) : 0 };

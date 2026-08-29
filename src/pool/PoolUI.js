@@ -74,10 +74,7 @@ export class PoolUI {
             this.renderGrid();
         } catch (e) {
             this.pool = null;
-            const hint = /Failed to fetch/i.test(e.message)
-                ? ' - the server must send an Access-Control-Allow-Origin header for the browser to read it'
-                : '';
-            this.setStatus(`Could not load pool: ${e.message}${hint}`, 'error');
+            this.setStatus(`Could not load pool: ${e.message}`, 'error');
         }
     }
 
@@ -161,9 +158,10 @@ export class PoolUI {
                 </div>
             </div>
             <div class="pool-detail-grid">
-                ${block('Trainer', row('OT name', m.otName) + row('OT ID', m.otId) + row('Friendship', m.friendship) +
-                    row('Held item', m.item ? (m.item.name || `Item #${m.item.id}`) : null) + row('Nature', m.nature) +
-                    row('EXP', m.exp) + row('Current HP', m.currHp) + row('Inside the egg', m.hatchName))}
+                ${block('Trainer', row('OT name', m.otName) + row('OT ID', m.otId))}
+                ${block('Details', row('Held item', m.item ? (m.item.name || `Item #${m.item.id}`) : null) +
+                    row('Nature', m.nature) + row('Friendship', m.friendship) + row('EXP', m.exp) +
+                    row('Current HP', m.currHp) + row('Inside the egg', m.hatchName))}
                 ${stats}${moves}${ivs}
             </div>`;
         this.el.modal.style.display = 'flex';

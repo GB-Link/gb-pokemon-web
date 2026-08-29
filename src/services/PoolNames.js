@@ -42,9 +42,10 @@ export class PoolNames {
     }
 
     // Gen 3-encoded string -> ASCII
-    static gen3Text(table, start) {
+    static gen3Text(table, start, maxLen = Infinity) {
         let s = '';
-        for (let i = start; i < table.length; i++) {
+        const end = Math.min(table.length, start + maxLen);
+        for (let i = start; i < end; i++) {
             const c = table[i];
             if (c === this.GEN3_EOL) break;
             const ascii = this.gen3ToAscii[c];
