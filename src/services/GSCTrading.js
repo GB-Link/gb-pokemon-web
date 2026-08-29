@@ -27,6 +27,15 @@ export class GSCTrading extends TradingProtocol {
         // If not provided, auto-accepts the other player's mode
         this.negotiationPrompt = options.negotiationPrompt ?? null;
 
+        // Authentication token to identify/authorize this client to the trade
+        // server. The WebSocket transport is otherwise unauthenticated, so
+        // the token is sent to the server on connect to prevent session
+        // impersonation.
+        this.authToken = options.authToken ?? null;
+        if (this.authToken && this.ws) {
+            this.ws.sendData('AUTH', new TextEncoder().encode(this.authToken));
+        }
+
         // Japanese mail converter - for converting mail between JP and International formats
         this.jpMailConverter = this.isJapanese ? new GSCJPMailConverter() : null;
 
