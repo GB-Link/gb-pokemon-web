@@ -110,15 +110,15 @@ button {
 }
 
 /* Primary colored buttons (purple/blue) - use dark text for contrast */
-button:not(.btn-option):not(.btn-secondary):not(.modal-close):not(:disabled) {
+button:not(.btn-option):not(.btn-secondary):not(.modal-close):not(.pool-card):not(:disabled) {
     color: #000;
 }
 
-body.light-mode button:not(.btn-option):not(.btn-secondary):not(.modal-close):not(:disabled) {
+body.light-mode button:not(.btn-option):not(.btn-secondary):not(.modal-close):not(.pool-card):not(:disabled) {
     color: #fff;
 }
 
-button:hover {
+button:not(.pool-card):hover {
     opacity: 0.9;
     background-color: var(--primary-hover);
 }
@@ -775,4 +775,238 @@ details.log-card[open] summary {
 .log-copy-btn {
     padding: 4px 10px;
     font-size: 12px;
+}
+
+/* ==================== Pool viewer ==================== */
+
+.pool-controls {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.pool-controls input[type="text"] {
+    flex: 1 1 220px;
+    min-width: 180px;
+}
+
+.pool-status {
+    margin: 6px 0 0;
+    font-weight: 600;
+}
+
+.pool-status[data-type="error"] { color: var(--error-color); }
+.pool-status[data-type="success"] { color: var(--success-color); }
+
+.pool-source-line {
+    margin: 4px 0 0;
+    font-size: 0.8rem;
+    opacity: 0.65;
+}
+
+.pool-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+.pool-stat {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.pool-stat-wide { grid-column: 1 / -1; }
+
+.pool-stat-value {
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: var(--primary-color);
+    line-height: 1.1;
+}
+
+.pool-stat-label {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    opacity: 0.7;
+}
+
+.pool-top { font-size: 0.95rem; }
+
+.pool-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+    gap: 12px;
+}
+
+.pool-grid .pool-card,
+.pool-grid .pool-card:hover {
+    background: var(--card-bg);
+    color: var(--text-color);
+}
+
+.pool-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    padding: 10px 8px;
+    color: var(--text-color);
+    font: inherit;
+    text-align: center;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    transition: border-color 0.15s, transform 0.15s;
+}
+
+.pool-card:hover {
+    border-color: var(--primary-color);
+    transform: translateY(-2px);
+}
+
+.pool-sprite {
+    width: 90px;
+    height: 90px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.pool-sprite img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    image-rendering: pixelated;
+}
+
+.pool-sprite.big { width: 132px; height: 132px; }
+
+.pool-grid .pool-name { color: var(--heading-color); }
+
+.pool-name {
+    font-weight: 700;
+    font-size: 0.95rem;
+    word-break: break-word;
+}
+
+.pool-sub {
+    font-size: 0.78rem;
+    opacity: 0.7;
+}
+
+.pool-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    justify-content: center;
+}
+
+.pool-badge {
+    font-size: 0.68rem;
+    padding: 1px 6px;
+    border-radius: 10px;
+    background: var(--input-bg);
+    border: 1px solid var(--border-color);
+}
+
+.pool-badge.shiny { color: #ffd166; border-color: #ffd16655; }
+.pool-badge.egg { color: var(--success-color); border-color: #03dac655; }
+
+.pool-empty { opacity: 0.7; }
+
+.pool-detail-head {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    margin-bottom: 16px;
+}
+
+.pool-detail-head h3 { margin: 0 0 4px; }
+.pool-detail-head p { margin: 0 0 6px; }
+
+.pool-detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 14px;
+}
+
+.pool-detail-block h4 {
+    margin: 0 0 6px;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    opacity: 0.7;
+}
+
+.pool-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 3px 0;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 0.9rem;
+}
+
+.pool-row:last-child { border-bottom: none; }
+
+/* Eggs show the egg sprite, cross-fading to the species on hover */
+.pool-sprite.egg-swap {
+    position: relative;
+}
+
+.pool-sprite.egg-swap img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    image-rendering: pixelated;
+    transition: opacity 0.25s ease;
+}
+
+.pool-sprite.egg-swap .hatch { opacity: 0; }
+
+/* The reveal belongs to the detail view: hover on a pointer, tap/click
+   anywhere (mobile has no hover) */
+#pool-modal .pool-sprite.egg-swap { cursor: pointer; }
+
+
+
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Links styled as header buttons (button styling comes from the element
+   selector, so anchors need it spelled out) */
+.header-link {
+    display: inline-flex;
+    align-items: center;
+    text-decoration: none;
+    line-height: 1;
+    background: var(--input-bg);
+    color: var(--text-color);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    transition: border-color 0.15s, color 0.15s;
+}
+
+.header-link:hover {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+
+body.light-mode .header-link {
+    background: var(--card-bg);
+    color: var(--text-color);
 }
