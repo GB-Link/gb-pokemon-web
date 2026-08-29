@@ -124,6 +124,17 @@ export class PoolData {
             : [['HP', hp], ['Attack', atk], ['Defense', def], ['Speed', spd], ['Sp. Atk/Def', spc]];
     }
 
+    /**
+     * Gen 2 hides Unown's form in the DVs: two bits from each of Attack,
+     * Defense, Speed and Special, read as one byte and divided by 10.
+     */
+    static unownLetterGen2(ivs) {
+        const atk = (ivs >> 12) & 0xF, def = (ivs >> 8) & 0xF, spd = (ivs >> 4) & 0xF, spc = ivs & 0xF;
+        const packed = (((atk >> 1) & 3) << 6) | (((def >> 1) & 3) << 4)
+            | (((spd >> 1) & 3) << 2) | ((spc >> 1) & 3);
+        return Math.floor(packed / 10);
+    }
+
     static decodeGen1(e, slot) {
         const internal = e[0];
         const national = PoolNames.gen1ToNational(internal);
@@ -153,10 +164,13 @@ export class PoolData {
         const stats = ['HP', 'Attack', 'Defense', 'Speed', 'Sp. Attack', 'Sp. Defense']
             .map((n, i) => [n, (e[36 + i * 2] << 8) | e[37 + i * 2]]);
         const itemId = e[1];
+        const unownLetter = species === PoolNames.UNOWN_SPECIES ? this.unownLetterGen2(ivs) : null;
+        const realName = unownLetter !== null
+            ? PoolNames.unownName(unownLetter) : PoolNames.speciesName(species);
         return {
-            slot, gen: 2, national: species,
-            speciesName: PoolNames.speciesName(isEgg ? PoolNames.EGG_SPECIES : species),
-            hatchName: isEgg ? PoolNames.speciesName(species) : null,
+            slot, gen: 2, national: species, unownLetter,
+            speciesName: isEgg ? PoolNames.speciesName(PoolNames.EGG_SPECIES) : realName,
+            hatchName: isEgg ? realName : null,
             nickname: this.gscText(e.subarray(59, 70)),
             otName: this.gscText(e.subarray(48, 59)),
             otId: (e[6] << 8) | e[7],
@@ -191,8 +205,10 @@ export class PoolData {
         const national = PoolNames.gen3ToNational(species);
         const ivs = mon.getIVs ? mon.getIVs() : null;
         const itemId = mon.getItem ? mon.getItem() : 0;
+        const unownLetter = (species === RSESPTradingPokemonInfo.UNOWN_SPECIES && mon.getUnownLetter)
+            ? mon.getUnownLetter() : null;
         return {
-            slot, gen: 3, national,
+            slot, gen: 3, national, unownLetter,
             speciesName: PoolNames.speciesName(isEgg ? PoolNames.EGG_SPECIES : (mon.getMonIndex ? mon.getMonIndex() : species)),
             hatchName: isEgg ? PoolNames.speciesName(mon.getMonIndex ? mon.getMonIndex() : species) : null,
             nickname: PoolNames.gen3Text(e, RSESPTradingPokemonInfo.NICKNAME_POS, RSESPTradingPokemonInfo.NICKNAME_LEN),
@@ -222,8 +238,24 @@ export class PoolData {
      * and 2 sets are opaque white by default; their "transparent" variants are
      * both alpha-masked and higher resolution, so they suit either theme.
      */
+    static UNOWN_FORMS = [...'abcdefghijklmnopqrstuvwxyz', 'exclamation', 'question'];
+
+    static unownSpritePath(mon) {
+        const form = this.UNOWN_FORMS[mon.unownLetter];
+        if (!form) return null;
+        if (mon.gen === 2) {
+            const file = mon.unownLetter === 0 ? '201.png' : `201-${form}.png`;
+            return `generation-ii/gold/transparent/${file}`;
+        }
+        return `generation-iii/emerald/${mon.isShiny ? 'shiny/' : ''}201-${form}.png`;
+    }
+
     static spriteUrl(mon) {
         if (!mon.national) return null;
+        if (mon.unownLetter !== null && mon.unownLetter !== undefined) {
+            const unown = this.unownSpritePath(mon);
+            if (unown) return `${this.SPRITE_BASE}/${unown}`;
+        }
         const shiny = mon.isShiny ? 'shiny/' : '';
         const path = {
             1: `generation-i/red-blue/transparent/${mon.national}.png`,
@@ -236,6 +268,10 @@ export class PoolData {
     /** Opaque sprite, used only if the transparent one is missing. */
     static spriteFallbackUrl(mon) {
         if (!mon.national) return null;
+        if (mon.unownLetter !== null && mon.unownLetter !== undefined) {
+            const unown = this.unownSpritePath(mon);
+            if (unown) return `${this.SPRITE_BASE}/${unown}`;
+        }
         const shiny = mon.isShiny ? 'shiny/' : '';
         const path = {
             1: `generation-i/red-blue/${mon.national}.png`,

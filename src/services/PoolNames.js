@@ -16,6 +16,8 @@ export class PoolNames {
     static NUM_POKEMON_NAME_LANGUAGES = 4;
     static GEN3_EOL = 0xFF;
     static EGG_SPECIES = 412;
+    static UNOWN_SPECIES = 201;
+    static UNOWN_B_START = 415;
 
     static loaded = false;
     static gen3ToAscii = null;
@@ -78,6 +80,10 @@ export class PoolNames {
         }
         const entry = tableIndex * this.NUM_POKEMON_NAME_LANGUAGES + DefaultNames.languageNamesIndex[this.ENGLISH_LANGUAGE];
         return this.gen3Text(DefaultNames.pokemonNames, DefaultNames.getTablePointer(DefaultNames.pokemonNames, entry));
+    }
+
+    static unownName(letter) {
+        return this.speciesName(letter ? this.UNOWN_B_START + letter - 1 : this.UNOWN_SPECIES);
     }
 
     static moveName(id) {
