@@ -27,6 +27,7 @@ export class PoolNames {
     static itemGen12To3 = null;
     static natureNames = null;
     static natureStats = null;
+    static gen3JpChars = null;
 
     static async load() {
         if (this.loaded) return true;
@@ -44,17 +45,38 @@ export class PoolNames {
             fetchBin('item_gen12_to_3.bin'), fetchBin('nature_names.bin'),
             fetchBin('pokemon_natures.bin'),
         ]);
+        this.buildGen3JapaneseTable();
         this.loaded = true;
         return true;
     }
 
     // Gen 3-encoded string -> ASCII
-    static gen3Text(table, start, maxLen = Infinity) {
+    static buildGen3JapaneseTable() {
+        if (this.gen3JpChars) return;
+        const table = new Array(256).fill('');
+        const put = (start, chars) => [...chars].forEach((c, i) => { table[start + i] = c; });
+        put(0x01, 'あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん');
+        put(0x2F, 'ぁぃぅぇぉゃゅょ');
+        put(0x37, 'がぎぐげござじずぜぞだぢづでどばびぶべぼぱぴぷぺぽ');
+        table[0x50] = 'っ';
+        put(0x51, 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン');
+        put(0x7F, 'ァィゥェォャュョ');
+        put(0x87, 'ガギグゲゴザジズゼゾダヂヅデドバビブベボパピプペポ');
+        table[0xA0] = 'ッ';
+        this.gen3JpChars = table;
+    }
+
+    static gen3Text(table, start, maxLen = Infinity, japanese = false) {
         let s = '';
         const end = Math.min(table.length, start + maxLen);
         for (let i = start; i < end; i++) {
             const c = table[i];
             if (c === this.GEN3_EOL) break;
+            const kana = japanese ? this.gen3JpChars[c] : '';
+            if (kana) {
+                s += kana;
+                continue;
+            }
             const ascii = this.gen3ToAscii[c];
             if (!ascii) break;
             s += String.fromCharCode(ascii);

@@ -207,12 +207,14 @@ export class PoolData {
         const itemId = mon.getItem ? mon.getItem() : 0;
         const unownLetter = (species === RSESPTradingPokemonInfo.UNOWN_SPECIES && mon.getUnownLetter)
             ? mon.getUnownLetter() : null;
+        const japanese = e[RSESPTradingPokemonInfo.LANGUAGE_POS]
+            === RSESPTradingPokemonInfo.JAPANESE_LANGUAGE_ID;
         return {
             slot, gen: 3, national, unownLetter,
             speciesName: PoolNames.speciesName(isEgg ? PoolNames.EGG_SPECIES : (mon.getMonIndex ? mon.getMonIndex() : species)),
             hatchName: isEgg ? PoolNames.speciesName(mon.getMonIndex ? mon.getMonIndex() : species) : null,
-            nickname: PoolNames.gen3Text(e, RSESPTradingPokemonInfo.NICKNAME_POS, RSESPTradingPokemonInfo.NICKNAME_LEN),
-            otName: PoolNames.gen3Text(e, RSESPTradingPokemonInfo.OT_NAME_POS, RSESPTradingPokemonInfo.OT_NAME_LEN),
+            nickname: PoolNames.gen3Text(e, RSESPTradingPokemonInfo.NICKNAME_POS, RSESPTradingPokemonInfo.NICKNAME_LEN, japanese),
+            otName: PoolNames.gen3Text(e, RSESPTradingPokemonInfo.OT_NAME_POS, RSESPTradingPokemonInfo.OT_NAME_LEN, japanese),
             otId: (new DataView(e.buffer, e.byteOffset)).getUint16(RSESPTradingPokemonInfo.OT_ID_POS, true),
             level: mon.getLevel ? mon.getLevel() : 0,
             currHp: mon.getCurrHp ? mon.getCurrHp() : 0,
@@ -233,11 +235,6 @@ export class PoolData {
     static SPRITE_BASE = 'https://cdn.jsdelivr.net/gh/PokeAPI/sprites@master/sprites/pokemon/versions';
     static EGG_SPRITE = 'https://cdn.jsdelivr.net/gh/PokeAPI/sprites@master/sprites/pokemon/egg.png';
 
-    /**
-     * Sprite from the PokeAPI set, using art from the matching era. The Gen 1
-     * and 2 sets are opaque white by default; their "transparent" variants are
-     * both alpha-masked and higher resolution, so they suit either theme.
-     */
     static UNOWN_FORMS = [...'abcdefghijklmnopqrstuvwxyz', 'exclamation', 'question'];
 
     static unownSpritePath(mon) {
