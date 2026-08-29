@@ -93,6 +93,7 @@ export class GSCTrading extends TradingProtocol {
         // GSC Party Data Structure offsets (from gsc_trading_data_utils.py)
         this.TRADING_POKEMON_LENGTH = 0x30;      // 48 bytes per Pokemon core data
         this.TRADING_NAME_LENGTH = 0x0B;         // 11 bytes per name (OT/Nickname)
+        this.TRADING_PARTY_INFO_POS = 0x0B;      // Party count, then the species list
         this.TRADING_POKEMON_POS = 0x15;         // Offset where Pokemon data starts
         this.TRADING_POKEMON_OT_POS = 0x135;     // Offset where OT names start
         this.TRADING_POKEMON_NICKNAME_POS = 0x177; // Offset where nicknames start
@@ -809,10 +810,12 @@ export class GSCTrading extends TradingProtocol {
         // 5. Sender (14 bytes) - zeros for no mail
         offset += SENDER_LEN; // Already zeros
 
-        // 6. Egg flag (1 byte) - at the very end
-        // result[offset] already 0 from initialization = not an egg
+        // 6. Egg flag (1 byte): egg slots are marked with EGG_ID in the
+        // party's species list
+        const isEgg = this.gbPartyData[this.TRADING_PARTY_INFO_POS + 1 + index] === GSCUtils.EGG_ID;
+        result[offset] = isEgg ? GSCUtils.EGG_VALUE : 0;
 
-        this.log(`Extracted Pokemon data for index ${index}: ${result.length} bytes (1 choice + ${SINGLE_POKEMON_DATA_LEN} data + 1 egg)`);
+        this.log(`Extracted Pokemon data for index ${index}: ${result.length} bytes (1 choice + ${SINGLE_POKEMON_DATA_LEN} data + 1 egg${isEgg ? ', EGG' : ''})`);
         return result;
     }
     /**
