@@ -1,33 +1,27 @@
 # GBLink_Pokemon_Web
 
-This is a work in progress JavaScript-based web application for **PokemonGB_Online_Trades**, ported from the [original Python implementation](https://github.com/Lorenzooone/PokemonGB_Online_Trades). It allows you to trade Pokémon from your physical Game Boy cartridges directly in the browser using WebUSB.
+This is a web port from the CLI made by Lorenzooone, [original CLI implementation]([https://github.com/Lorenzooone/PokemonGB_Online_Trades_and_Battles). It allows you to trade or battle on your physical gen1-2 Pokemon games as well as Trade with Gen3.
+Ported to Web by Starlark for easier access and wider device support.
 
 ## Features
 
-- **WebUSB Support**: Connect your Game Boy Link Cable USB adapter directly to Chrome/Edge without installing Python drivers.
+- **WebUSB/WebSerial Support**: Connect your Game Boy Link Cable USB adapter directly to Chrome/Edge/Firefox.
 
-- **Gen 1 (Red/Blue/Green/Yellow)**:
-    - **International Versions**: Fully working (Pool Trade & 2-Player).
-    - **Japanese Versions**: Not tested.
+- **Gen 1 (Red/Blue/Green/Yellow)
 
-- **Gen 2 Support (Gold/Silver/Crystal)**:
-    - **International Versions**: Fully working (Pool Trade & 2-Player).
-    - **Japanese Versions**: Not tested.
-    - **Mail**: Not tested.
+- **Gen 2 Support (Gold/Silver/Crystal)
 
-- **Link Battles (Gen 1 & Gen 2)**:
-    - 2-Player battles over the same server as the Python client (the two are interoperable - a web player can battle a CLI player).
-    - Japanese versions supported the same way as the Python client (no mail, name fillers handled).
-    - Not tested on real hardware yet.
+- **Link Battles (Gen 1 & Gen 2)
+- 
 - **Multiboot**:
     - **Sending**: Sends the Gen3toGenx multiboot ROM to GBA. Using the Pokemon-Gen3-to-GenX project. https://github.com/Lorenzooone/Pokemon-Gen3-to-Gen-X
 
-- **Gen 3 (Ruby/Sapphire/Emerald/FRLG)**: Not working yet.
+- **Gen 3 (Ruby/Sapphire/Emerald/FRLG)**: Working through the multiboot.
 
 ## Prerequisites
 
 - **Google Chrome** or **Microsoft Edge** (browsers with WebUSB support).
-- A **Game Boy Link Cable to USB Adapter** Using this firmware: [GBLink firmware](https://github.com/starlarkus/GBLink-Firmware) or [reconfigurable firmware (legacy)](https://github.com/starlarkus/gb-link-firmware-reconfigurable)
+- A **GB-Link Adapter** Using this firmware: [GBLink firmware](https://github.com/GB-Link/GBLink-Firmware/releases) or [reconfigurable firmware](https://github.com/starlarkus/gb-link-firmware-reconfigurable)
 - Game Boy Color Link Cable
 
 ## Usage
@@ -55,17 +49,8 @@ This is a work in progress JavaScript-based web application for **PokemonGB_Onli
     - **Buffered mode** starts with a ghost battle against a stand-in "FLEE" party: pick any action, then flee - the real battle follows.
     - Battles are not available for Gen 3 or Time Capsule.
 
-## Troubleshooting
-- Currently when refreshing the web page most of the time the pico/usb device needs to be reset. Unplugging or pressing reset on the USB adapter should acomplish this
-- If on linux you may need to edit Udev rules. See here https://stackoverflow.com/questions/30983221/chrome-app-fails-to-open-usb-device
-
 ### Multiboot (GBA)
-- Connect your GBA via the link cable with no cartridge inserted.
-- Click **"Send Multiboot"** to transfer the multiboot ROM to GBA.
+- Send multiboot homebrew to trade with gen3 games.
 
 ## Safety & Sanity Checks
 Like the original project, this web port attempts to includes sanity checks to ensure that data received from other players (or the server) is valid and won't crash your game or corrupt your save.
-
-## Credits
-- Based on [PokemonGB_Online_Trades](https://github.com/Lorenzooone/PokemonGB_Online_Trades) by Lorenzooone.
-- Ported to JavaScript/WebUSB for easier access.
