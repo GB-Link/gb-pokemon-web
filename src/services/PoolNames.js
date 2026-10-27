@@ -3,85 +3,153 @@
  * displaying pool contents.
  *
  * Species names come from Pokemon-Gen3-to-Gen-X's packed table (Gen 3 text
- * encoding, converted to ASCII here); move and item names from its plain
- * ASCII tables. The dex tables convert a game's own species index to the
+ * encoding); move and item names from its plain ASCII tables. Game text is
+ * decoded per language with PokemonGB_Online_Trades' alphabet tables: Gen 1/2
+ * bytes go through the Gen 3 charset, except Korean, which has its own
+ * two-byte table. The dex tables convert a game's own species index to the
  * national number the sprite CDN uses.
  */
 
-import { DefaultNames } from './DefaultNames.js?v=91';
+import { DefaultNames } from './DefaultNames.js?v=92';
 
 export class PoolNames {
     static BASE_FOLDER = '/data/names/';
+    static JAPANESE_LANGUAGE = 1;
     static ENGLISH_LANGUAGE = 2;
+    static KOREAN_LANGUAGE = 6;
+    static LANGUAGES = {
+        1: { name: 'Japanese', short: 'JPN' }, 2: { name: 'English', short: 'ENG' },
+        3: { name: 'French', short: 'FRE' }, 4: { name: 'Italian', short: 'ITA' },
+        5: { name: 'German', short: 'GER' }, 6: { name: 'Korean', short: 'KOR' },
+        7: { name: 'Spanish', short: 'SPA' },
+    };
     static NUM_POKEMON_NAME_LANGUAGES = 4;
     static GEN3_EOL = 0xFF;
+    static GEN2_EOL = 0x50;
+    static GEN2_NEWLINE = 0x4E;
+    static GEN2_NEWLINE_KOREAN = 0x59;
     static EGG_SPECIES = 412;
+    static MR_MIME_SPECIES = 122;
     static UNOWN_SPECIES = 201;
     static UNOWN_B_START = 415;
+    static UNOWN_FORMS_GEN3 = 28;
+    static UNOWN_REAL_NAME_POS = 445;
+    static MR_MIME_OLD_NAME_POS = 446;
+    static LAST_GEN2_SPECIES = 251;
+    static KOREAN_NAME_SIZE = 10;
 
     static loaded = false;
-    static gen3ToAscii = null;
     static moveNames = null;
     static itemNames = null;
     static dexConversion = null;
     static itemGen12To3 = null;
     static natureNames = null;
     static natureStats = null;
-    static gen3JpChars = null;
+    static gen3AlphabetInt = null;
+    static gen3AlphabetJp = null;
+    static gen2AlphabetKor = null;
+    static gen12ToGen3Int = null;
+    static gen12ToGen3Jp = null;
+    static koreanNames = null;
+    static koreanEggName = null;
 
     static async load() {
         if (this.loaded) return true;
-        const fetchBin = async (name) => {
+        const fetchFile = async (name) => {
             const r = await fetch(this.BASE_FOLDER + name);
             if (!r.ok) throw new Error(`${name}: ${r.status}`);
-            return new Uint8Array(await r.arrayBuffer());
+            return r;
         };
+        const fetchBin = async (name) => new Uint8Array(await (await fetchFile(name)).arrayBuffer());
+        const fetchAlphabet = async (name) => this.parseAlphabet(await (await fetchFile(name)).text());
         await DefaultNames.load();
-        [this.gen3ToAscii, this.moveNames, this.itemNames, this.dexConversion] = await Promise.all([
-            fetchBin('text_gen3_to_general_int.bin'), fetchBin('move_names.bin'),
-            fetchBin('item_names.bin'), fetchBin('dex_conversion.bin'),
+        [this.moveNames, this.itemNames, this.dexConversion, this.itemGen12To3, this.natureNames, this.natureStats] = await Promise.all([
+            fetchBin('move_names.bin'), fetchBin('item_names.bin'), fetchBin('dex_conversion.bin'),
+            fetchBin('item_gen12_to_3.bin'), fetchBin('nature_names.bin'), fetchBin('pokemon_natures.bin'),
         ]);
-        [this.itemGen12To3, this.natureNames, this.natureStats] = await Promise.all([
-            fetchBin('item_gen12_to_3.bin'), fetchBin('nature_names.bin'),
-            fetchBin('pokemon_natures.bin'),
+        [this.gen3AlphabetInt, this.gen3AlphabetJp, this.gen2AlphabetKor] = await Promise.all([
+            fetchAlphabet('text_gen3_to_general_int.txt'), fetchAlphabet('text_gen3_to_general_jp.txt'),
+            fetchAlphabet('text_gen2_to_general_kor.txt'),
         ]);
-        this.buildGen3JapaneseTable();
+        [this.gen12ToGen3Int, this.gen12ToGen3Jp, this.koreanNames, this.koreanEggName] = await Promise.all([
+            fetchBin('text_gen12_to_gen3_int.bin'), fetchBin('text_gen12_to_gen3_jp.bin'),
+            fetchBin('pokemon_names_kr_gen2.bin'), fetchBin('egg_name_kr_gen2.bin'),
+        ]);
         this.loaded = true;
         return true;
     }
 
-    // Gen 3-encoded string -> ASCII
-    static buildGen3JapaneseTable() {
-        if (this.gen3JpChars) return;
-        const table = new Array(256).fill('');
-        const put = (start, chars) => [...chars].forEach((c, i) => { table[start + i] = c; });
-        put(0x01, 'あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん');
-        put(0x2F, 'ぁぃぅぇぉゃゅょ');
-        put(0x37, 'がぎぐげござじずぜぞだぢづでどばびぶべぼぱぴぷぺぽ');
-        table[0x50] = 'っ';
-        put(0x51, 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン');
-        put(0x7F, 'ァィゥェォャュョ');
-        put(0x87, 'ガギグゲゴザジズゼゾダヂヅデドバビブベボパピプペポ');
-        table[0xA0] = 'ッ';
-        this.gen3JpChars = table;
+    /**
+     * An alphabet file is 16 rows of 16 '#'-terminated characters, one per
+     * byte. <TABLE> marks a lead byte whose next byte indexes "# TABLE n".
+     */
+    static parseAlphabet(text) {
+        const lines = text.split(/\r?\n/);
+        const readTable = (header) => {
+            let i = 0;
+            if (header) {
+                i = lines.findIndex(line => line.trim() === header);
+                if (i < 0) return new Array(256).fill('?');
+                i++;
+            }
+            while (i < lines.length && (lines[i].startsWith('#') || !lines[i].trim())) i++;
+            const out = [];
+            for (let row = 0; row < 16; row++) out.push(...(lines[i + row] || '').split('#').slice(0, 16));
+            return out;
+        };
+        return readTable(null).map((token, i) => token === '<TABLE>'
+            ? readTable(`# TABLE ${i}`).map(t => this.displayChar(t))
+            : this.displayChar(token));
+    }
+
+    // "<?>" is a literal question mark, "<PK>" a glyph, "<『/“>" a Japanese/other pair
+    static displayChar(token) {
+        if (token === '<?>') return '?';
+        if (token.length > 2 && token.startsWith('<') && token.endsWith('>')) {
+            return token.slice(1, -1).split('/').pop();
+        }
+        return token;
     }
 
     static gen3Text(table, start, maxLen = Infinity, japanese = false) {
+        const alphabet = japanese ? this.gen3AlphabetJp : this.gen3AlphabetInt;
         let s = '';
         const end = Math.min(table.length, start + maxLen);
         for (let i = start; i < end; i++) {
-            const c = table[i];
-            if (c === this.GEN3_EOL) break;
-            const kana = japanese ? this.gen3JpChars[c] : '';
-            if (kana) {
-                s += kana;
-                continue;
-            }
-            const ascii = this.gen3ToAscii[c];
-            if (!ascii) break;
-            s += String.fromCharCode(ascii);
+            if (table[i] === this.GEN3_EOL) break;
+            s += alphabet[table[i]];
         }
         return s;
+    }
+
+    /** Gen 1/2 text (0x50 terminated) as the game of that language shows it. */
+    static gen12Text(bytes, language) {
+        let s = '';
+        for (let i = 0; i < bytes.length && bytes[i] !== this.GEN2_EOL; i++) {
+            if (bytes[i] === this.GEN2_NEWLINE || (language === this.KOREAN_LANGUAGE && bytes[i] === this.GEN2_NEWLINE_KOREAN)) {
+                s += '\n';
+                continue;
+            }
+            if (language === this.KOREAN_LANGUAGE) {
+                const entry = this.gen2AlphabetKor[bytes[i]];
+                if (Array.isArray(entry)) {
+                    i++;
+                    s += entry[i < bytes.length ? bytes[i] : this.GEN2_EOL];
+                } else {
+                    s += entry;
+                }
+                continue;
+            }
+            const japanese = language === this.JAPANESE_LANGUAGE;
+            const toGen3 = japanese ? this.gen12ToGen3Jp : this.gen12ToGen3Int;
+            s += (japanese ? this.gen3AlphabetJp : this.gen3AlphabetInt)[toGen3[bytes[i]]];
+        }
+        return s.trim();
+    }
+
+    static languageInfo(language) {
+        const info = this.LANGUAGES[language];
+        return info ? { id: language, ...info } : null;
     }
 
     // NUL-terminated ASCII string
@@ -94,18 +162,43 @@ export class PoolNames {
         return s;
     }
 
-    /** Name for a species by its entry in the shared name table. */
-    static speciesName(tableIndex) {
+    /**
+     * Name for a species by its entry in the shared name table, in a game
+     * language. maxLen caps it the way a Gen 1/2 name field would.
+     */
+    static speciesName(tableIndex, language = this.ENGLISH_LANGUAGE, maxLen = Infinity) {
         if (!this.loaded) return '?';
+        if (language === this.KOREAN_LANGUAGE) return this.koreanSpeciesName(tableIndex);
+        const japanese = language === this.JAPANESE_LANGUAGE;
         if (tableIndex === this.EGG_SPECIES) {
-            return this.gen3Text(DefaultNames.eggNames, DefaultNames.getTablePointer(DefaultNames.eggNames, this.ENGLISH_LANGUAGE));
+            return this.gen3Text(DefaultNames.eggNames, DefaultNames.getTablePointer(DefaultNames.eggNames, language), maxLen, japanese);
         }
-        const entry = tableIndex * this.NUM_POKEMON_NAME_LANGUAGES + DefaultNames.languageNamesIndex[this.ENGLISH_LANGUAGE];
-        return this.gen3Text(DefaultNames.pokemonNames, DefaultNames.getTablePointer(DefaultNames.pokemonNames, entry));
+        const entry = tableIndex * this.NUM_POKEMON_NAME_LANGUAGES + DefaultNames.languageNamesIndex[language];
+        return this.gen3Text(DefaultNames.pokemonNames, DefaultNames.getTablePointer(DefaultNames.pokemonNames, entry), maxLen, japanese);
     }
 
-    static unownName(letter) {
-        return this.speciesName(letter ? this.UNOWN_B_START + letter - 1 : this.UNOWN_SPECIES);
+    // Korean names exist only for the Gen 2 species
+    static koreanSpeciesName(tableIndex) {
+        if (tableIndex === this.EGG_SPECIES) return this.gen12Text(this.koreanEggName, this.KOREAN_LANGUAGE);
+        let species = tableIndex;
+        if (tableIndex === this.MR_MIME_OLD_NAME_POS) species = this.MR_MIME_SPECIES;
+        else if (tableIndex === this.UNOWN_REAL_NAME_POS
+            || (tableIndex >= this.UNOWN_B_START && tableIndex < this.UNOWN_B_START + this.UNOWN_FORMS_GEN3 - 1)) species = this.UNOWN_SPECIES;
+        if (species < 1 || species > this.LAST_GEN2_SPECIES) return null;
+        const start = species * this.KOREAN_NAME_SIZE;
+        return this.gen12Text(this.koreanNames.subarray(start, start + this.KOREAN_NAME_SIZE), this.KOREAN_LANGUAGE);
+    }
+
+    /**
+     * The name a Gen 1/2 game of that language gives the species, i.e. what
+     * an un-nicknamed Pokemon carries. Takes the name-table entry.
+     */
+    static defaultGen12Name(tableIndex, language) {
+        return this.speciesName(tableIndex, language, language === this.JAPANESE_LANGUAGE ? 5 : 10);
+    }
+
+    static unownIndex(letter) {
+        return letter ? this.UNOWN_B_START + letter - 1 : this.UNOWN_SPECIES;
     }
 
     static moveName(id) {

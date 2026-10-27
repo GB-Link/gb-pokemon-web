@@ -3,7 +3,7 @@
  * Extends GSCUtils with RBY-specific constants and methods.
  */
 
-import { GSCUtils } from './GSCUtils.js?v=91';
+import { GSCUtils } from './GSCUtils.js?v=92';
 
 export class RBYUtils extends GSCUtils {
     // ==================== RBY-SPECIFIC STRUCTURE CONSTANTS ====================

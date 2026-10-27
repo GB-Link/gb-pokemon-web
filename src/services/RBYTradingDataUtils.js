@@ -3,9 +3,9 @@
  * Extends GSC data structures with RBY-specific formats.
  */
 
-import { RBYUtils } from './RBYUtils.js?v=91';
-import { GSCTradingText, GSCTradingPartyInfo, GSCTradingData } from './GSCTradingDataUtils.js?v=91';
-import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=91';
+import { RBYUtils } from './RBYUtils.js?v=92';
+import { GSCTradingText, GSCTradingPartyInfo, GSCTradingData } from './GSCTradingDataUtils.js?v=92';
+import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=92';
 
 /**
  * RBY Pokemon info with Gen 1 specific structure (44 bytes vs 48 for GSC)

@@ -3,8 +3,9 @@
  * a detail panel for the selected Pokemon.
  */
 
-import { PoolData } from '../services/PoolData.js?v=91';
-import { SettingsManager } from '../services/SettingsManager.js?v=91';
+import { PoolData } from '../services/PoolData.js?v=92';
+import { PoolNames } from '../services/PoolNames.js?v=92';
+import { SettingsManager } from '../services/SettingsManager.js?v=92';
 
 export class PoolUI {
     constructor() {
@@ -96,6 +97,7 @@ export class PoolUI {
         if (this.filter) {
             mons = mons.filter(m =>
                 m.speciesName.toLowerCase().includes(this.filter) ||
+                (m.localSpeciesName || '').toLowerCase().includes(this.filter) ||
                 (m.nickname || '').toLowerCase().includes(this.filter) ||
                 (m.otName || '').toLowerCase().includes(this.filter));
         }
@@ -119,6 +121,7 @@ export class PoolUI {
                 m.isShiny ? `<span class="pool-badge shiny"${this.shinyTitle(m)}>Shiny</span>` : '',
                 m.isEgg ? '<span class="pool-badge egg">Egg</span>' : '',
                 m.item ? `<span class="pool-badge item">${this.esc(m.item.name || `Item #${m.item.id}`)}</span>` : '',
+                this.languageBadge(m),
             ].join('');
             const title = m.nickname && m.nickname !== m.speciesName ? m.nickname : m.speciesName;
             return `<button class="pool-card" data-slot="${m.slot}">
@@ -150,16 +153,18 @@ export class PoolUI {
                 ${this.spriteMarkup(m, true)}
                 <div>
                     <h3>${this.esc(m.nickname || m.speciesName)}</h3>
-                    <p class="pool-sub">${this.esc(m.speciesName)}${m.national ? ` &middot; #${m.national}` : ''}${m.level ? ` &middot; Level ${m.level}` : ''}</p>
+                    <p class="pool-sub">${this.esc(m.speciesName)}${m.localSpeciesName ? ` (${this.esc(m.localSpeciesName)})` : ''}${m.national ? ` &middot; #${m.national}` : ''}${m.level ? ` &middot; Level ${m.level}` : ''}</p>
                     <div class="pool-badges">
                         ${m.isShiny ? `<span class="pool-badge shiny"${this.shinyTitle(m)}>Shiny</span>` : ''}
                         ${m.isEgg ? '<span class="pool-badge egg">Egg</span>' : ''}
+                        ${this.languageBadge(m)}
                     </div>
                 </div>
             </div>
             <div class="pool-detail-grid">
                 ${block('Trainer', row('OT name', m.otName) + row('OT ID', m.otId))}
-                ${block('Details', row('Held item', m.item ? (m.item.name || `Item #${m.item.id}`) : null) +
+                ${block('Details', row('Language', m.language?.name) +
+                    row('Held item', m.item ? (m.item.name || `Item #${m.item.id}`) : null) +
                     row('Nature', m.nature) + row('Friendship', m.friendship) + row('EXP', m.exp) +
                     row('Current HP', m.currHp) + row('Inside the egg', m.hatchName))}
                 ${stats}${moves}${ivs}
@@ -210,6 +215,11 @@ export class PoolUI {
             </div>`;
         }
         return `<div class="${cls}"><img src="${sprite}" alt=""${lazy} data-fallback="${fallback}" ${onerror}></div>`;
+    }
+
+    languageBadge(m) {
+        if (!m.language || m.language.id === PoolNames.ENGLISH_LANGUAGE) return '';
+        return `<span class="pool-badge" title="${this.esc(m.language.name)}">${this.esc(m.language.short)}</span>`;
     }
 
     shinyTitle(m) {

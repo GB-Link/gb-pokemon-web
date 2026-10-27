@@ -12,11 +12,11 @@
  * identical seed) so the two games' battle RNGs stay in lockstep.
  */
 
-import { GSCTrading } from './GSCTrading.js?v=91';
-import { GSCUtils } from './GSCUtils.js?v=91';
-import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=91';
-import { GSCTradingData } from './GSCTradingDataUtils.js?v=91';
-import { DefaultNames } from './DefaultNames.js?v=91';
+import { GSCTrading } from './GSCTrading.js?v=92';
+import { GSCUtils } from './GSCUtils.js?v=92';
+import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=92';
+import { GSCTradingData } from './GSCTradingDataUtils.js?v=92';
+import { DefaultNames } from './DefaultNames.js?v=92';
 
 export class GSCBattling extends GSCTrading {
     constructor(usb, ws, logger, tradeType = 'battle', isBuffered = false, doSanityChecks = true, options = {}) {

@@ -1,9 +1,9 @@
 
-import { TradingProtocol } from './TradingProtocol.js?v=91';
-import { GSCUtils } from './GSCUtils.js?v=91';
-import { GSCChecks } from './GSCChecks.js?v=91';
-import { GSCJPMailConverter } from './GSCJPMailConverter.js?v=91';
-import { DefaultNames } from './DefaultNames.js?v=91';
+import { TradingProtocol } from './TradingProtocol.js?v=92';
+import { GSCUtils } from './GSCUtils.js?v=92';
+import { GSCChecks } from './GSCChecks.js?v=92';
+import { GSCJPMailConverter } from './GSCJPMailConverter.js?v=92';
+import { DefaultNames } from './DefaultNames.js?v=92';
 
 export class GSCTrading extends TradingProtocol {
     constructor(usb, ws, logger, tradeType = 'pool', isBuffered = false, doSanityChecks = true, options = {}) {

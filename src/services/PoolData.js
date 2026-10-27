@@ -3,54 +3,47 @@
  *
  * The server serves /pooldata{1,2,3} as a 20-byte header (magic, format
  * version, gen, entry size, count) followed by fixed-size records, each one
- * the same single-Pokemon payload a pool trade sends. Every generation is
+ * the same single-Pokemon payload a pool trade sends. From format version 2,
+ * Gen 1/2 records also end in a 4-byte mask of the game languages their names
+ * are valid in, which decides how the names are read. Every generation is
  * normalized here into one shape for display.
  */
 
-import { PoolNames } from './PoolNames.js?v=91';
-import { GSCUtils } from './GSCUtils.js?v=91';
-import { RSESPUtils, RSESPTradingPokemonInfo } from './RSESPUtils.js?v=91';
-import { RSESPChecks } from './RSESPChecks.js?v=91';
+import { PoolNames } from './PoolNames.js?v=92';
+import { GSCUtils } from './GSCUtils.js?v=92';
+import { RSESPUtils, RSESPTradingPokemonInfo } from './RSESPUtils.js?v=92';
+import { RSESPChecks } from './RSESPChecks.js?v=92';
 
 export class PoolData {
     static MAGIC = 0x35678292;
-    static SUPPORTED_VERSION = 1;
+    static SUPPORTED_VERSIONS = new Set([1, 2]);
+    static LANGUAGE_MASK_LEN = 4;
     static GEN2_EGG_VALUE = 0x38;
     // Gen 2 mail items have no Gen 3 equivalent to take a name from
     static GEN2_MAIL_ITEMS = new Set([0x9E, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD]);
-
-    static byteToChar = null;
+    static LANGUAGE_ORDER = [1, 2, 3, 4, 5, 6, 7];
 
     /**
-     * Gen 1/2 text bytes to characters. The shipped text_conv.txt only covers
-     * what the client needs to write (uppercase and a few symbols), so player
-     * nicknames - which are mixed case - need the full character set.
+     * Picks the language a Gen 1/2 Pokemon's names are read in from the
+     * server's mask: one whose default species name the nickname still is,
+     * else English when listed, else the first listed - the server's own
+     * choice. Null without a mask (older servers).
      */
-    static buildTextTable() {
-        if (this.byteToChar) return;
-        const map = { 0x7F: ' ', 0x9A: '(', 0x9B: ')', 0x9C: ':', 0x9D: ';', 0x9E: '[', 0x9F: ']' };
-        for (let i = 0; i < 26; i++) {
-            map[0x80 + i] = String.fromCharCode(65 + i);
-            map[0xA0 + i] = String.fromCharCode(97 + i);
-        }
-        Object.assign(map, {
-            0xBA: 'e', 0xBB: "'d", 0xBC: "'l", 0xBD: "'s", 0xBE: "'t", 0xBF: "'v",
-            0xE0: "'", 0xE1: 'PK', 0xE2: 'MN', 0xE3: '-', 0xE4: "'r", 0xE5: "'m",
-            0xE6: '?', 0xE7: '!', 0xE8: '.', 0xE9: '&', 0xEA: 'e', 0xEF: '\u2642',
-            0xF0: '\u00A5', 0xF1: '\u00D7', 0xF2: '.', 0xF3: '/', 0xF4: ',', 0xF5: '\u2640',
-        });
-        for (let i = 0; i < 10; i++) map[0xF6 + i] = String.fromCharCode(48 + i);
-        this.byteToChar = map;
+    static gen12Language(mask, nickname, nameIndex) {
+        if (mask === undefined) return null;
+        const listed = this.LANGUAGE_ORDER.filter(language => mask & (1 << language));
+        if (!listed.length) return null;
+        const prefer = (languages) => languages.includes(PoolNames.ENGLISH_LANGUAGE) ? PoolNames.ENGLISH_LANGUAGE : languages[0];
+        const unnamed = listed.filter(language =>
+            PoolNames.gen12Text(nickname, language) === PoolNames.defaultGen12Name(nameIndex, language));
+        return prefer(unnamed.length ? unnamed : listed);
     }
 
-    static gscText(bytes) {
-        this.buildTextTable();
-        let s = '';
-        for (const b of bytes) {
-            if (b === 0x50) break;
-            s += this.byteToChar[b] ?? '';
-        }
-        return s.trim();
+    /** The species name in the Pokemon's own language, when that differs. */
+    static localSpeciesName(tableIndex, language, englishName) {
+        if (!language || language === PoolNames.ENGLISH_LANGUAGE) return null;
+        const name = PoolNames.speciesName(tableIndex, language);
+        return name && name !== englishName ? name : null;
     }
 
     /**
@@ -58,7 +51,6 @@ export class PoolData {
      */
     static async fetch(baseUrl, gen) {
         await PoolNames.load();
-        this.buildTextTable();
         if (gen === 3) {
             await RSESPUtils.load();
             this.rseChecks = this.rseChecks || new RSESPChecks();
@@ -75,20 +67,28 @@ export class PoolData {
         const magic = dv.getUint32(0, true);
         if (magic !== this.MAGIC) throw new Error(`unexpected pool format (magic 0x${magic.toString(16)})`);
         const version = dv.getUint32(4, true);
-        if (version !== this.SUPPORTED_VERSION) throw new Error(`unsupported pool format version ${version}`);
+        if (!this.SUPPORTED_VERSIONS.has(version)) throw new Error(`unsupported pool format version ${version}`);
         const gen = dv.getUint32(8, true) + 1;
         const entrySize = dv.getUint32(12, true);
         const count = dv.getUint32(16, true);
         if (!entrySize || 20 + entrySize * count > bytes.length) throw new Error('pool data truncated');
+        const hasLanguageMask = version >= 2 && gen < 3;
+        const monSize = entrySize - (hasLanguageMask ? this.LANGUAGE_MASK_LEN : 0);
 
-        const decode = { 1: (e, i) => this.decodeGen1(e, i), 2: (e, i) => this.decodeGen2(e, i), 3: (e, i) => this.decodeGen3(e, i) }[gen];
+        const decode = {
+            1: (e, i, mask) => this.decodeGen1(e, i, mask),
+            2: (e, i, mask) => this.decodeGen2(e, i, mask),
+            3: (e, i) => this.decodeGen3(e, i),
+        }[gen];
         if (!decode) throw new Error(`unsupported generation ${gen}`);
 
         const mons = [];
         for (let i = 0; i < count; i++) {
-            const entry = bytes.subarray(20 + i * entrySize, 20 + (i + 1) * entrySize);
+            const start = 20 + i * entrySize;
+            const entry = bytes.subarray(start, start + monSize);
+            const mask = hasLanguageMask ? dv.getUint32(start + monSize, true) : undefined;
             try {
-                const mon = decode(entry, i);
+                const mon = decode(entry, i, mask);
                 if (mon) mons.push(mon);
             } catch (_) { /* skip an entry we cannot read rather than losing the pool */ }
         }
@@ -135,16 +135,22 @@ export class PoolData {
         return Math.floor(packed / 10);
     }
 
-    static decodeGen1(e, slot) {
+    static decodeGen1(e, slot, mask) {
         const internal = e[0];
         const national = PoolNames.gen1ToNational(internal);
         const ivs = (e[27] << 8) | e[28];
         const stats = ['HP', 'Attack', 'Defense', 'Speed', 'Special'].map((n, i) => [n, (e[34 + i * 2] << 8) | e[35 + i * 2]]);
+        const nickname = e.subarray(55, 66);
+        const nameIndex = this.gen12NameIndex(national, false);
+        const language = this.gen12Language(mask, nickname, nameIndex);
+        const textLanguage = language ?? PoolNames.ENGLISH_LANGUAGE;
+        const speciesName = PoolNames.speciesName(national);
         return {
-            slot, gen: 1, national,
-            speciesName: PoolNames.speciesName(national),
-            otName: this.gscText(e.subarray(44, 55)),
-            nickname: this.gscText(e.subarray(55, 66)),
+            slot, gen: 1, national, speciesName,
+            localSpeciesName: this.localSpeciesName(nameIndex, language, speciesName),
+            language: PoolNames.languageInfo(language),
+            otName: PoolNames.gen12Text(e.subarray(44, 55), textLanguage),
+            nickname: PoolNames.gen12Text(nickname, textLanguage),
             otId: (e[12] << 8) | e[13],
             level: e[33],
             currHp: (e[1] << 8) | e[2],
@@ -157,22 +163,37 @@ export class PoolData {
         };
     }
 
-    static decodeGen2(e, slot) {
+    // The name-table entry a Gen 1/2 game names the species after
+    static gen12NameIndex(national, isEgg) {
+        if (isEgg) return PoolNames.EGG_SPECIES;
+        if (national === PoolNames.MR_MIME_SPECIES) return PoolNames.MR_MIME_OLD_NAME_POS;
+        if (national === PoolNames.UNOWN_SPECIES) return PoolNames.UNOWN_REAL_NAME_POS;
+        return national;
+    }
+
+    static decodeGen2(e, slot, mask) {
         const species = e[0];
         const ivs = (e[0x15] << 8) | e[0x16];
-        const isEgg = e[117] === this.GEN2_EGG_VALUE;
+        // The egg flag closes the record; newer servers send longer mail data before it
+        const isEgg = e[e.length - 1] === this.GEN2_EGG_VALUE;
         const stats = ['HP', 'Attack', 'Defense', 'Speed', 'Sp. Attack', 'Sp. Defense']
             .map((n, i) => [n, (e[36 + i * 2] << 8) | e[37 + i * 2]]);
         const itemId = e[1];
         const unownLetter = species === PoolNames.UNOWN_SPECIES ? this.unownLetterGen2(ivs) : null;
-        const realName = unownLetter !== null
-            ? PoolNames.unownName(unownLetter) : PoolNames.speciesName(species);
+        const nameIndex = unownLetter !== null ? PoolNames.unownIndex(unownLetter) : species;
+        const realName = PoolNames.speciesName(nameIndex);
+        const speciesName = isEgg ? PoolNames.speciesName(PoolNames.EGG_SPECIES) : realName;
+        const nickname = e.subarray(59, 70);
+        const language = this.gen12Language(mask, nickname, this.gen12NameIndex(species, isEgg));
+        const textLanguage = language ?? PoolNames.ENGLISH_LANGUAGE;
+        const localIndex = unownLetter !== null && !isEgg ? nameIndex : this.gen12NameIndex(species, isEgg);
         return {
-            slot, gen: 2, national: species, unownLetter,
-            speciesName: isEgg ? PoolNames.speciesName(PoolNames.EGG_SPECIES) : realName,
+            slot, gen: 2, national: species, unownLetter, speciesName,
+            localSpeciesName: this.localSpeciesName(localIndex, language, speciesName),
+            language: PoolNames.languageInfo(language),
             hatchName: isEgg ? realName : null,
-            nickname: this.gscText(e.subarray(59, 70)),
-            otName: this.gscText(e.subarray(48, 59)),
+            nickname: PoolNames.gen12Text(nickname, textLanguage),
+            otName: PoolNames.gen12Text(e.subarray(48, 59), textLanguage),
             otId: (e[6] << 8) | e[7],
             level: e[31],
             currHp: (e[34] << 8) | e[35],
@@ -207,13 +228,20 @@ export class PoolData {
         const itemId = mon.getItem ? mon.getItem() : 0;
         const unownLetter = (species === RSESPTradingPokemonInfo.UNOWN_SPECIES && mon.getUnownLetter)
             ? mon.getUnownLetter() : null;
-        const japanese = e[RSESPTradingPokemonInfo.LANGUAGE_POS]
-            === RSESPTradingPokemonInfo.JAPANESE_LANGUAGE_ID;
+        const languageId = e[RSESPTradingPokemonInfo.LANGUAGE_POS];
+        const japanese = languageId === RSESPTradingPokemonInfo.JAPANESE_LANGUAGE_ID;
+        const monIndex = mon.getMonIndex ? mon.getMonIndex() : species;
+        const speciesName = PoolNames.speciesName(isEgg ? PoolNames.EGG_SPECIES : monIndex);
+        // An egg's language is a Japanese placeholder until it hatches
+        const language = isEgg ? null : PoolNames.languageInfo(languageId);
         return {
-            slot, gen: 3, national, unownLetter,
-            speciesName: PoolNames.speciesName(isEgg ? PoolNames.EGG_SPECIES : (mon.getMonIndex ? mon.getMonIndex() : species)),
-            hatchName: isEgg ? PoolNames.speciesName(mon.getMonIndex ? mon.getMonIndex() : species) : null,
-            nickname: PoolNames.gen3Text(e, RSESPTradingPokemonInfo.NICKNAME_POS, RSESPTradingPokemonInfo.NICKNAME_LEN, japanese),
+            slot, gen: 3, national, unownLetter, speciesName,
+            localSpeciesName: language ? this.localSpeciesName(monIndex, language.id, speciesName) : null,
+            language,
+            hatchName: isEgg ? PoolNames.speciesName(monIndex) : null,
+            // Gen 3 eggs always store the Japanese egg name, which the games never show
+            nickname: isEgg ? PoolNames.speciesName(PoolNames.EGG_SPECIES)
+                : PoolNames.gen3Text(e, RSESPTradingPokemonInfo.NICKNAME_POS, RSESPTradingPokemonInfo.NICKNAME_LEN, japanese),
             otName: PoolNames.gen3Text(e, RSESPTradingPokemonInfo.OT_NAME_POS, RSESPTradingPokemonInfo.OT_NAME_LEN, japanese),
             otId: (new DataView(e.buffer, e.byteOffset)).getUint16(RSESPTradingPokemonInfo.OT_ID_POS, true),
             level: mon.getLevel ? mon.getLevel() : 0,
@@ -232,8 +260,8 @@ export class PoolData {
         };
     }
 
-    static SPRITE_BASE = 'https://cdn.jsdelivr.net/gh/PokeAPI/sprites@master/sprites/pokemon/versions';
-    static EGG_SPRITE = 'https://cdn.jsdelivr.net/gh/PokeAPI/sprites@master/sprites/pokemon/egg.png';
+    static SPRITE_BASE = 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/versions';
+    static EGG_SPRITE = 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/egg.png';
 
     static UNOWN_FORMS = [...'abcdefghijklmnopqrstuvwxyz', 'exclamation', 'question'];
 

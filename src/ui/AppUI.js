@@ -1,15 +1,15 @@
 
-import { UsbConnection, CMD, MODE } from '../services/UsbConnection.js?v=91';
-import { SerialConnection } from '../services/SerialConnection.js?v=91';
-import { BgbConnection } from '../services/BgbConnection.js?v=91';
-import { WebSocketClient } from '../services/WebSocketClient.js?v=91';
-import { RBYTrading } from '../services/RBYTrading.js?v=91';
-import { GSCTrading } from '../services/GSCTrading.js?v=91';
-import { RBYBattling } from '../services/RBYBattling.js?v=91';
-import { GSCBattling } from '../services/GSCBattling.js?v=91';
-import { SettingsManager } from '../services/SettingsManager.js?v=91';
-import { multiboot } from '../services/Multiboot.js?v=91';
-import { RSESPTrading } from '../services/RSESPTrading.js?v=91';
+import { UsbConnection, CMD, MODE } from '../services/UsbConnection.js?v=92';
+import { SerialConnection } from '../services/SerialConnection.js?v=92';
+import { BgbConnection } from '../services/BgbConnection.js?v=92';
+import { WebSocketClient } from '../services/WebSocketClient.js?v=92';
+import { RBYTrading } from '../services/RBYTrading.js?v=92';
+import { GSCTrading } from '../services/GSCTrading.js?v=92';
+import { RBYBattling } from '../services/RBYBattling.js?v=92';
+import { GSCBattling } from '../services/GSCBattling.js?v=92';
+import { SettingsManager } from '../services/SettingsManager.js?v=92';
+import { multiboot } from '../services/Multiboot.js?v=92';
+import { RSESPTrading } from '../services/RSESPTrading.js?v=92';
 
 export class AppUI {
     constructor() {
