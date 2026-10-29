@@ -1,9 +1,9 @@
 
-import { TradingProtocol } from './TradingProtocol.js?v=93';
-import { GSCUtils } from './GSCUtils.js?v=93';
-import { GSCChecks } from './GSCChecks.js?v=93';
-import { GSCJPMailConverter } from './GSCJPMailConverter.js?v=93';
-import { GSCTradingData } from './GSCTradingDataUtils.js?v=93';
+import { TradingProtocol } from './TradingProtocol.js?v=98';
+import { GSCUtils } from './GSCUtils.js?v=98';
+import { GSCChecks } from './GSCChecks.js?v=98';
+import { GSCJPMailConverter } from './GSCJPMailConverter.js?v=98';
+import { GSCTradingData } from './GSCTradingDataUtils.js?v=98';
 
 export class GSCTrading extends TradingProtocol {
     static JAPANESE_LANGUAGE = 1;

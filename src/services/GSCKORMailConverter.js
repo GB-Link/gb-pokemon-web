@@ -8,9 +8,9 @@
  * marker, their language and the bits Korean would mangle, so they come back
  * as they were.
  */
-import { GSCUtils, GSCUtilsMisc, pyIndex, pySlice, pyListEquals } from './GSCUtils.js?v=93';
-import { GSCTradingMailData } from './GSCTradingDataUtils.js?v=93';
-import { PokemonNamesForGen } from './TextConversions.js?v=93';
+import { GSCUtils, GSCUtilsMisc, pyIndex, pySlice, pyListEquals } from './GSCUtils.js?v=98';
+import { GSCTradingMailData } from './GSCTradingDataUtils.js?v=98';
+import { PokemonNamesForGen } from './TextConversions.js?v=98';
 
 function check(condition) {
     if (!condition) throw new Error('AssertionError');

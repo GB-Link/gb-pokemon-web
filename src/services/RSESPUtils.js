@@ -1,7 +1,7 @@
 
-import { GSCUtils, pySlice } from './GSCUtils.js?v=93';
-import { GSCTradingText } from './GSCTradingDataUtils.js?v=93';
-import { PokemonNamesForGen } from './TextConversions.js?v=93';
+import { GSCUtils, pySlice } from './GSCUtils.js?v=98';
+import { GSCTradingText } from './GSCTradingDataUtils.js?v=98';
+import { PokemonNamesForGen } from './TextConversions.js?v=98';
 
 // ==================== RSESPUtils ====================
 

@@ -59,11 +59,14 @@
                 <button id="btn-generate-room" type="button">Generate</button>
             </div>
             <div class="button-row">
-                <div class="usb-button-group">
-                    <button id="btn-connect-usb">Connect USB</button>
-                    <div class="usb-status-box">
-                        <span id="usb-status" class="status disconnected">Disconnected</span>
+                <div class="button-row-left">
+                    <div class="usb-button-group">
+                        <button id="btn-connect-usb">Connect USB</button>
+                        <div class="usb-status-box">
+                            <span id="usb-status" class="status disconnected">Disconnected</span>
+                        </div>
                     </div>
+                    <button id="btn-connect-emulator" class="btn-secondary" type="button">Connect Emulator</button>
                 </div>
                 <div class="button-row-right">
                     <button id="btn-time-capsule" class="btn-toggle" style="display: none;">Time Capsule: OFF</button>
@@ -101,8 +104,15 @@
             </div>
         </div>
 
-        <div class="card">
-            <h2>Status</h2>
+        <div class="card" id="status-card">
+            <div class="card-title-row">
+                <h2 id="status-title">Status</h2>
+                <div id="emu-view" class="emu-view" hidden>
+                    <button id="btn-emu-sound" type="button" class="icon-btn"></button>
+                    <button id="btn-emu-border" type="button" class="icon-btn" hidden></button>
+                    <button id="btn-emu-fullscreen" type="button" class="icon-btn"></button>
+                </div>
+            </div>
             <div class="trade-status-row">
                 <span id="status-indicator" class="trade-indicator"></span>
                 <p id="status-text">Connect your GB-Link adapter to begin</p>
@@ -116,6 +126,49 @@
                 <div class="progress-track">
                     <div id="progress-fill" class="progress-fill"></div>
                 </div>
+            </div>
+            <div id="emulator-panel" class="emulator-panel" hidden>
+                <div id="emu-screen" class="emu-screen empty">
+                    <canvas id="emu-canvas" width="160" height="144" aria-label="Game Boy screen"></canvas>
+                    <div id="emu-loader" class="emu-loader">
+                        <button id="btn-emu-back" type="button" class="btn-secondary" hidden></button>
+                        <p class="emu-loader-title">Load your Pokémon game</p>
+                        <button id="btn-emu-load" type="button">Choose ROM and save</button>
+                        <p id="emu-loader-hint" class="emu-loader-hint">Select the game's ROM (.gb or .gbc) and its .sav together, or just the ROM and add the save afterwards with Load save. Your files stay on this device.</p>
+                        <section id="emu-library" class="emu-library" hidden aria-label="Games kept in this browser">
+                            <div class="emu-library-head"><span>Kept in this browser</span><span id="emu-library-size"></span></div>
+                            <ul id="emu-library-list" class="emu-library-list"></ul>
+                            <p class="emu-library-note">Only this browser has these. Download the saves you want to keep.</p>
+                        </section>
+                    </div>
+                </div>
+                <div id="emu-touch" class="emu-touch">
+                    <div class="emu-dpad">
+                        <span data-key="UP" class="up"></span>
+                        <span data-key="LEFT" class="left"></span>
+                        <span class="center"></span>
+                        <span data-key="RIGHT" class="right"></span>
+                        <span data-key="DOWN" class="down"></span>
+                    </div>
+                    <div class="emu-meta">
+                        <span data-key="SELECT">Select</span>
+                        <span data-key="START">Start</span>
+                    </div>
+                    <div class="emu-ab">
+                        <span data-key="B">B</span>
+                        <span data-key="A">A</span>
+                    </div>
+                </div>
+                <div id="emu-toolbar" class="emu-toolbar" hidden>
+                    <button id="btn-emu-download" type="button">Download save</button>
+                    <button id="btn-emu-load-save" type="button" class="btn-secondary">Load save</button>
+                    <button id="btn-emu-reset" type="button" class="btn-secondary">Reset</button>
+                    <button id="btn-emu-replace" type="button" class="btn-secondary">Load other game</button>
+                    <button id="btn-emu-close" type="button" class="btn-secondary">Close emulator</button>
+                </div>
+                <p class="emu-keys">Keys: arrows, X or A = A, Z or S = B, Enter = Start, Shift = Select. Gamepads work too.</p>
+                <input type="file" id="emu-file" accept=".gb,.gbc,.sgb,.sav,.srm" multiple hidden>
+                <input type="file" id="emu-save-file" accept=".sav,.srm" hidden>
             </div>
         </div>
 
@@ -277,7 +330,7 @@
             </div>
         </div>
     </div>
-    <script type="module" src="src/main.js?v=93"></script>
+    <script type="module" src="src/main.js?v=98"></script>
     <script src="src/launcher-return.js"></script>
 </body>
 

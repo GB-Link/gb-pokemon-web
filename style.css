@@ -454,6 +454,14 @@ input[type="text"] {
     font-size: 12px;
 }
 
+/* Connect buttons on the left side */
+.button-row-left {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+}
+
 /* Group buttons on the right side */
 .button-row-right {
     display: flex;
@@ -1053,4 +1061,534 @@ details.log-card[open] summary {
 body.light-mode .header-link {
     background: var(--card-bg);
     color: var(--text-color);
+}
+
+/* In-page emulator (shown inside the Status card) */
+.emulator-panel {
+    margin-top: 14px;
+}
+
+.emulator-panel[hidden],
+.emu-loader[hidden],
+.emu-toolbar[hidden] {
+    display: none;
+}
+
+.emu-screen {
+    position: relative;
+    width: 100%;
+    max-width: 480px;
+    margin: 0 auto;
+    aspect-ratio: var(--emu-ar, 10 / 9);
+    background: #000;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.emu-screen canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+}
+
+.emu-screen.empty canvas {
+    visibility: hidden;
+}
+
+.emu-loader {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 20px;
+    text-align: center;
+    background: var(--input-bg);
+    border: 2px dashed var(--input-border);
+    border-radius: 6px;
+}
+
+.emu-loader-title {
+    margin: 0;
+    font-weight: 600;
+    font-size: 1.05rem;
+}
+
+.emu-loader-hint {
+    margin: 0;
+    max-width: 320px;
+    font-size: 12px;
+    opacity: 0.75;
+}
+
+/* Games kept in this browser, listed in the loader: the box grows with the list */
+.emu-screen.empty.has-library {
+    aspect-ratio: auto;
+}
+
+.emu-screen.empty.has-library canvas {
+    display: none;
+}
+
+.emu-screen.empty.has-library .emu-loader {
+    position: relative;
+    inset: auto;
+}
+
+.emu-library {
+    width: 100%;
+    max-width: 420px;
+    text-align: left;
+}
+
+.emu-library[hidden] {
+    display: none;
+}
+
+.emu-library-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 0 6px 6px;
+    font-size: 12px;
+    opacity: 0.75;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.emu-library-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.emu-game {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+#emu-library .emu-game-play {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    margin: 3px 0;
+    padding: 6px;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-color);
+    text-align: left;
+}
+
+#emu-library .emu-game-play:hover,
+#emu-library .icon-btn:hover {
+    background: rgba(127, 127, 127, 0.18);
+    opacity: 1;
+}
+
+#emu-library .icon-btn {
+    flex: none;
+    color: var(--text-color);
+}
+
+#emu-library .icon-btn[hidden] {
+    visibility: hidden;
+}
+
+#emu-library .icon-btn:disabled {
+    background: transparent;
+    opacity: 0.3;
+}
+
+.emu-game-title {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.emu-game-meta,
+.emu-game-unsaved {
+    max-width: 100%;
+    overflow: hidden;
+    font-size: 12px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.emu-game-meta {
+    opacity: 0.7;
+}
+
+.emu-game-unsaved {
+    color: #ffb74d;
+}
+
+body.light-mode .emu-game-unsaved {
+    color: #9a5b00;
+}
+
+.emu-game-unsaved::before {
+    content: '';
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    margin-right: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    vertical-align: 1px;
+}
+
+.emu-library-note {
+    margin: 8px 6px 0;
+    font-size: 12px;
+    opacity: 0.7;
+}
+
+@media (max-width: 480px) {
+    .emu-screen.has-library .emu-loader {
+        padding: 14px 8px;
+    }
+}
+
+.emu-toolbar {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 8px;
+    max-width: 480px;
+    margin: 12px auto 0;
+}
+
+.emu-toolbar button {
+    grid-column: span 2;
+    padding-left: 8px;
+    padding-right: 8px;
+}
+
+.emu-toolbar button:nth-child(n + 4) {
+    grid-column: span 3;
+}
+
+@media (max-width: 480px) {
+    .emu-toolbar {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .emu-toolbar button,
+    .emu-toolbar button:nth-child(n + 4) {
+        grid-column: auto;
+    }
+
+    .emu-toolbar button:last-child {
+        grid-column: span 2;
+    }
+}
+
+/* Status card title with the emulator's view controls */
+.card-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 16px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.card-title-row h2 {
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+
+.emu-view {
+    display: flex;
+    gap: 4px;
+    margin: -6px -6px -6px 0;
+}
+
+.emu-view[hidden],
+.emu-view .icon-btn[hidden] {
+    display: none;
+}
+
+.icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-color);
+    opacity: 0.8;
+}
+
+.icon-btn:hover {
+    background: rgba(127, 127, 127, 0.18);
+    opacity: 1;
+}
+
+.icon-btn[aria-pressed="true"] {
+    color: var(--primary-color);
+    opacity: 1;
+}
+
+.icon-btn[aria-pressed="false"] {
+    opacity: 0.55;
+}
+
+.emu-toolbar button.attention::after {
+    content: '';
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    margin-left: 7px;
+    border-radius: 50%;
+    background: #ffb74d;
+    vertical-align: middle;
+}
+
+.emu-keys {
+    margin: 10px 0 0;
+    font-size: 12px;
+    text-align: center;
+    opacity: 0.7;
+}
+
+.emu-touch {
+    display: none;
+}
+
+@media (pointer: coarse) {
+    .emu-keys {
+        display: none;
+    }
+
+    .emu-touch {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        grid-template-areas: "dpad ab" "meta meta";
+        align-items: center;
+        gap: 14px 8px;
+        max-width: 480px;
+        margin: 16px auto 0;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+    }
+
+    .emu-screen.empty + .emu-touch {
+        display: none;
+    }
+}
+
+.emu-dpad {
+    grid-area: dpad;
+    display: grid;
+    grid-template-columns: repeat(3, clamp(36px, 12vw, 46px));
+    grid-template-rows: repeat(3, clamp(36px, 12vw, 46px));
+}
+
+.emu-dpad span {
+    background: #3a3a3a;
+}
+
+.emu-dpad .up { grid-column: 2; grid-row: 1; border-radius: 8px 8px 0 0; }
+.emu-dpad .left { grid-column: 1; grid-row: 2; border-radius: 8px 0 0 8px; }
+.emu-dpad .center { grid-column: 2; grid-row: 2; }
+.emu-dpad .right { grid-column: 3; grid-row: 2; border-radius: 0 8px 8px 0; }
+.emu-dpad .down { grid-column: 2; grid-row: 3; border-radius: 0 0 8px 8px; }
+
+.emu-meta {
+    grid-area: meta;
+    display: flex;
+    justify-content: center;
+    gap: 16px;
+}
+
+.emu-meta span {
+    min-width: 64px;
+    padding: 6px 12px;
+    border-radius: 12px;
+    background: #3a3a3a;
+    color: #e0e0e0;
+    font-size: 11px;
+    font-weight: 600;
+    text-align: center;
+    text-transform: uppercase;
+}
+
+.emu-ab {
+    grid-area: ab;
+    display: flex;
+    justify-content: flex-end;
+    align-items: flex-start;
+    gap: 14px;
+}
+
+.emu-ab span {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: clamp(46px, 15vw, 58px);
+    height: clamp(46px, 15vw, 58px);
+    border-radius: 50%;
+    background: var(--primary-color);
+    color: #000;
+    font-weight: 700;
+    font-size: 18px;
+}
+
+.emu-ab span[data-key="B"] {
+    margin-top: 30px;
+}
+
+.emu-touch .pressed {
+    filter: brightness(1.45);
+}
+
+body.light-mode .emu-dpad span,
+body.light-mode .emu-meta span {
+    background: #c8c8c8;
+    color: #333;
+}
+
+body.light-mode .emu-ab span {
+    color: #fff;
+}
+
+/* Fullscreen: only the game card, filling the screen (the Fullscreen API where there is one, the window otherwise) */
+body.emu-fullscreen {
+    overflow: hidden;
+}
+
+body.emu-fullscreen #status-card {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 8px 14px 12px;
+    border-radius: 0;
+    box-shadow: none;
+}
+
+body.emu-fullscreen .card-title-row {
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+}
+
+body.emu-fullscreen #status-text {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+body.emu-fullscreen #status-detail,
+body.emu-fullscreen .emu-toolbar,
+body.emu-fullscreen .emu-keys {
+    display: none;
+}
+
+body.emu-fullscreen .emulator-panel {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    margin-top: 8px;
+}
+
+body.emu-fullscreen .emu-screen {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    max-width: none;
+    aspect-ratio: auto;
+    background: transparent;
+    border-radius: 0;
+}
+
+body.emu-fullscreen .emu-screen canvas {
+    object-fit: contain;
+}
+
+body.emu-fullscreen .negotiation-card {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    z-index: 1100;
+    width: min(92vw, 440px);
+    margin: 0;
+    transform: translate(-50%, -50%);
+}
+
+@media (pointer: coarse) {
+    body.emu-fullscreen .emu-touch {
+        flex: none;
+        width: 100%;
+        margin-top: 12px;
+    }
+}
+
+/* Phone upright: the picture under the status line, the controls in the middle of the space below it */
+@media (pointer: coarse) and (orientation: portrait) {
+    body.emu-fullscreen .emu-screen {
+        flex: 0 1 auto;
+        aspect-ratio: var(--emu-ar, 10 / 9);
+    }
+
+    body.emu-fullscreen .emu-touch {
+        flex: 1 0 auto;
+        align-content: center;
+        margin-top: 0;
+        padding: 12px 0;
+    }
+}
+
+/* Phone on its side: d-pad left of the screen, A/B and Select/Start right of it */
+@media (pointer: coarse) and (orientation: landscape) {
+    body.emu-fullscreen .emulator-panel {
+        --emu-side: clamp(150px, 22vw, 200px);
+    }
+
+    body.emu-fullscreen .emu-screen {
+        position: absolute;
+        inset: 0 calc(var(--emu-side) + 8px);
+        width: auto;
+    }
+
+    body.emu-fullscreen .emu-touch {
+        position: absolute;
+        inset: 0;
+        max-width: none;
+        margin: 0;
+        grid-template-columns: var(--emu-side) 1fr var(--emu-side);
+        grid-template-areas: "dpad . ab" "dpad . meta";
+        align-content: center;
+        pointer-events: none;
+    }
+
+    body.emu-fullscreen .emu-touch > * {
+        pointer-events: auto;
+    }
+
+    body.emu-fullscreen .emu-meta {
+        justify-content: flex-end;
+        gap: 12px;
+    }
+
+    body.emu-fullscreen .emu-meta span {
+        min-width: 0;
+        padding: 6px 10px;
+    }
 }

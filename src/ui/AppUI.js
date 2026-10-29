@@ -1,17 +1,18 @@
 
-import { UsbConnection, CMD, MODE } from '../services/UsbConnection.js?v=93';
-import { SerialConnection } from '../services/SerialConnection.js?v=93';
-import { BgbConnection } from '../services/BgbConnection.js?v=93';
-import { WebSocketClient } from '../services/WebSocketClient.js?v=93';
-import { RBYTrading } from '../services/RBYTrading.js?v=93';
-import { GSCTrading } from '../services/GSCTrading.js?v=93';
-import { GSCTradingKOR } from '../services/GSCTradingKOR.js?v=93';
-import { TradingProtocol } from '../services/TradingProtocol.js?v=93';
-import { RBYBattling } from '../services/RBYBattling.js?v=93';
-import { GSCBattling } from '../services/GSCBattling.js?v=93';
-import { SettingsManager } from '../services/SettingsManager.js?v=93';
-import { multiboot } from '../services/Multiboot.js?v=93';
-import { RSESPTrading } from '../services/RSESPTrading.js?v=93';
+import { UsbConnection, CMD, MODE } from '../services/UsbConnection.js?v=98';
+import { SerialConnection } from '../services/SerialConnection.js?v=98';
+import { BgbConnection } from '../services/BgbConnection.js?v=98';
+import { EmulatorConnection } from '../services/EmulatorConnection.js?v=98';
+import { WebSocketClient } from '../services/WebSocketClient.js?v=98';
+import { RBYTrading } from '../services/RBYTrading.js?v=98';
+import { GSCTrading } from '../services/GSCTrading.js?v=98';
+import { GSCTradingKOR } from '../services/GSCTradingKOR.js?v=98';
+import { TradingProtocol } from '../services/TradingProtocol.js?v=98';
+import { RBYBattling } from '../services/RBYBattling.js?v=98';
+import { GSCBattling } from '../services/GSCBattling.js?v=98';
+import { SettingsManager } from '../services/SettingsManager.js?v=98';
+import { multiboot } from '../services/Multiboot.js?v=98';
+import { RSESPTrading } from '../services/RSESPTrading.js?v=98';
 
 export class AppUI {
     constructor() {
@@ -23,6 +24,9 @@ export class AppUI {
         this.elements = {
             usbStatus: document.getElementById('usb-status'),
             btnConnectUsb: document.getElementById('btn-connect-usb'),
+            btnConnectEmulator: document.getElementById('btn-connect-emulator'),
+            statusTitle: document.getElementById('status-title'),
+            btnEmuClose: document.getElementById('btn-emu-close'),
             btnStartTrade: document.getElementById('btn-start-trade'),
             btnSendMultiboot: document.getElementById('btn-send-multiboot'),
             btnSettings: document.getElementById('btn-settings'),
@@ -96,6 +100,7 @@ export class AppUI {
 
     applyBgbMode() {
         if (!this.bgbMode) return;
+        this.elements.btnConnectEmulator.hidden = true;
         // BGB emulates GB/GBC only — no Gen 3 (GBA) and no multiboot.
         const gen3Btn = this.elements.genSelectGroup.querySelector('[data-value="3"]');
         if (gen3Btn) gen3Btn.style.display = 'none';
@@ -123,6 +128,8 @@ export class AppUI {
         } else {
             this.elements.btnConnectUsb.disabled = true;
         }
+        this.elements.btnConnectEmulator.addEventListener('click', () => this.connectEmulator());
+        this.elements.btnEmuClose.addEventListener('click', () => this.closeEmulator());
         this.elements.btnStartTrade.addEventListener('click', () => this.startTrade());
         this.elements.btnCopyLog.addEventListener('click', () => this.copyLog());
         this.elements.btnSendMultiboot.addEventListener('click', () => this.sendMultiboot());
@@ -577,7 +584,8 @@ export class AppUI {
             profanityFilter: this.settings.get('profanityFilter'),
             defaultPokemonNames: this.settings.get(isBattle ? 'battleDefaultPokemonNames' : 'tradeDefaultPokemonNames'),
             defaultTrainerNames: this.settings.get(isBattle ? 'battleDefaultTrainerNames' : 'tradeDefaultTrainerNames'),
-            clientType: this.connectionKind === 'bgb' ? TradingProtocol.CLIENT_TYPE_JS_EMU_BGB : TradingProtocol.CLIENT_TYPE_JS_USB,
+            clientType: { bgb: TradingProtocol.CLIENT_TYPE_JS_EMU_BGB, emulator: TradingProtocol.CLIENT_TYPE_JS_EMU_WEB }[this.connectionKind]
+                ?? TradingProtocol.CLIENT_TYPE_JS_USB,
         };
     }
 
@@ -603,7 +611,93 @@ export class AppUI {
     async connectUsb() { return this.connect('usb'); }
 
     checkReady() {
+        if (this.connectionKind === 'emulator' && !this.emulatorPanel?.hasGame) {
+            if (!this.isTradeActive) this.elements.btnStartTrade.disabled = true;
+            return;
+        }
         if (this.usb.isConnected) this.elements.btnStartTrade.disabled = false;
+    }
+
+    // === Emulator ===
+
+    async connectEmulator() {
+        if (this.isTradeActive) return;
+        const btn = this.elements.btnConnectEmulator;
+        btn.disabled = true;
+        try {
+            if (!this.emulatorPanel) {
+                const { EmulatorPanel } = await import('./EmulatorPanel.js?v=98');
+                const $ = (id) => document.getElementById(id);
+                this.emulatorPanel = new EmulatorPanel({
+                    panel: $('emulator-panel'), screen: $('emu-screen'), canvas: $('emu-canvas'), loader: $('emu-loader'),
+                    btnLoad: $('btn-emu-load'), btnBack: $('btn-emu-back'), loaderHint: $('emu-loader-hint'), file: $('emu-file'),
+                    library: $('emu-library'), librarySize: $('emu-library-size'), libraryList: $('emu-library-list'),
+                    touch: $('emu-touch'), toolbar: $('emu-toolbar'), btnDownload: $('btn-emu-download'),
+                    btnReplace: $('btn-emu-replace'), btnSound: $('btn-emu-sound'),
+                    btnLoadSave: $('btn-emu-load-save'), saveFile: $('emu-save-file'), btnReset: $('btn-emu-reset'),
+                    view: $('emu-view'), btnBorder: $('btn-emu-border'), btnFullscreen: $('btn-emu-fullscreen'),
+                }, {
+                    acceptGame: (info) => this.acceptEmulatorGame(info),
+                    onGameLoaded: (info, note) => this.onEmulatorGame(info, note),
+                    onMessage: (text, type, detail) => this.setStatus(text, type, detail),
+                    isInputActive: () => this.elements.settingsModal.style.display !== 'flex',
+                });
+            }
+            if (this.usb && this.usb.isConnected) {
+                try { await this.usb.disconnect(); } catch (_) {}
+            }
+            this.setStatus('Starting the emulator…', 'active');
+            await this.emulatorPanel.open();
+            this.connectionKind = 'emulator';
+            this.usb = new EmulatorConnection(this.emulatorPanel.emulator);
+            await this.usb.connect();
+            this.elements.usbStatus.textContent = 'Emulator';
+            this.elements.usbStatus.className = 'status connected';
+            this.elements.btnConnectUsb.disabled = true;
+            this.elements.statusTitle.textContent = 'Game';
+            this.log('Emulator ready.');
+            this.setStatus('Load your game to begin', 'active');
+            this.checkReady();
+        } catch (error) {
+            this.log(`Emulator failed to start: ${error}`);
+            this.setStatus('The emulator could not start', 'error', error && error.message ? error.message : '');
+            btn.disabled = false;
+        }
+    }
+
+    acceptEmulatorGame(info) {
+        return info ? null : 'This isn\'t a Gen 1 or Gen 2 Pokémon game';
+    }
+
+    onEmulatorGame(info, note) {
+        const genBtn = this.elements.genSelectGroup.querySelector(`[data-value="${info.gen}"]`);
+        if (genBtn && this.selectedGen !== String(info.gen)) this.onGenSelect(genBtn);
+        if (info.language) {
+            this.settings.set('language', info.language);
+            this.updateLanguagePicker();
+        }
+        const name = `Pokémon ${info.version}${info.language ? ` (${GSCTrading.LANGUAGE_NAMES[info.language]})` : ''}`;
+        this.log(`Emulator: ${name} loaded. ${note}`);
+        this.setStatus(`${name} is running`, 'success', `${note} Pick a connection type and press Start, then talk to the Cable Club receptionist.`);
+        this.checkReady();
+    }
+
+    async closeEmulator() {
+        if (this.isTradeActive) await this.stopTrade();
+        if (this.emulatorPanel) this.emulatorPanel.close();
+        if (this.connectionKind === 'emulator') {
+            try { await this.usb.disconnect(); } catch (_) {}
+            this.usb = new UsbConnection();
+            this.connectionKind = null;
+        }
+        this.elements.usbStatus.textContent = 'Disconnected';
+        this.elements.usbStatus.className = 'status disconnected';
+        this.elements.btnConnectUsb.disabled = !this.transport;
+        this.elements.btnConnectEmulator.disabled = false;
+        this.elements.btnStartTrade.disabled = true;
+        this.elements.statusTitle.textContent = 'Status';
+        this.setStatus('Connect your GB-Link adapter to begin');
+        this.log('Emulator closed.');
     }
 
     // === Trading ===
@@ -615,6 +709,17 @@ export class AppUI {
             this.setStatus(this.transport === 'bgb' ? 'BGB is not connected' : 'Adapter is not connected', 'error',
                 this.transport === 'bgb' ? 'Click Connect BGB first.' : 'Connect your adapter first.');
             return;
+        }
+        if (this.connectionKind === 'emulator') {
+            const info = this.emulatorPanel?.game?.info;
+            if (!info) {
+                this.setStatus('Load your game first', 'error');
+                return;
+            }
+            if (String(info.gen) !== this.selectedGen) {
+                this.setStatus(`Pokémon ${info.version} is a Gen ${info.gen} game`, 'error', `Pick Gen ${info.gen} before pressing Start.`);
+                return;
+            }
         }
 
         // Wait out any previous trade loop still unwinding so two loops never
@@ -633,6 +738,7 @@ export class AppUI {
         }
 
         this.isTradeActive = true;
+        this.emulatorPanel?.setTradeActive(true);
         this.elements.btnStartTrade.textContent = 'Stop';
         this.elements.btnStartTrade.disabled = false;
 
@@ -791,6 +897,7 @@ export class AppUI {
 
     resetTradeButton() {
         this.isTradeActive = false;
+        this.emulatorPanel?.setTradeActive(false);
         this.elements.btnStartTrade.textContent = 'Start';
         this.elements.btnStartTrade.disabled = false;
         this.hideProgress();

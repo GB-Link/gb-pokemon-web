@@ -1,6 +1,6 @@
-import { GSCTrading } from './GSCTrading.js?v=93';
-import { GSCUtils } from './GSCUtils.js?v=93';
-import { GSCKORMailConverter } from './GSCKORMailConverter.js?v=93';
+import { GSCTrading } from './GSCTrading.js?v=98';
+import { GSCUtils } from './GSCUtils.js?v=98';
+import { GSCKORMailConverter } from './GSCKORMailConverter.js?v=98';
 
 /**
  * Korean Gold/Silver: the same party sections as the international games,

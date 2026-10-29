@@ -31,6 +31,18 @@ Ported to Web by Starlark for easier access and wider device support.
 3. Click **"Connect USB Device"** and select your adapter.
 4. Select your game generation and trade mode.
 
+### Playing on the emulator (no adapter needed)
+- Press **Connect Emulator** instead of Connect USB. The Status box becomes a game screen.
+- Choose your game's ROM (.gb or .gbc) and its save (.sav) together, or the ROM first and then the save with **Load save**. Generation and Game Language are set from the ROM. Your files stay on your device.
+- The page keeps every game you load, with its save, in this browser. They are listed under **Kept in this browser** when you connect the emulator or press **Load other game** (which pauses the game you're playing): pick one to play it, or download its save or remove it with the buttons beside it. Games whose save changed since you last downloaded it are marked, and the page asks before that progress would be replaced or removed. Download the saves you want to keep: they are only in this browser.
+- **Reset** restarts the game like the power switch; your save is kept.
+- Gen 1 games run as on a Super Game Boy, in the colors the games made for it. The buttons next to the Game title turn sound on or off, add the game's Super Game Boy border, and go fullscreen. Red, Blue, Green, Yellow, Gold and Silver have a border; Gold and Silver keep their Game Boy Color colors inside it. Crystal and the Korean Gold and Silver have none. On a phone the on-screen buttons come along, beside the screen when the phone is turned sideways.
+- Play with the keyboard (arrows, X or A = A, Z or S = B, Enter = Start, Shift = Select), a gamepad, or the on-screen buttons on a phone.
+- Pick Trade, Battle or Pool Trade, press Start, then go to the Cable Club as on a real Game Boy. You can trade and battle with players on real hardware, on the emulator or on the Python CLI.
+- When the game has saved (after a trade, for example) **Download save** gets a dot: press it to get your updated .sav.
+- Gold, Silver and Crystal keep the time with a clock in the cartridge. A save from another emulator brings its clock along. A save without clock data, such as one dumped from a cartridge, starts the game's clock at your computer's time and day of the week; the cartridge's own clock is not changed when you put the save back.
+- Gen 1 and Gen 2 games: Red, Blue, Green, Yellow, Gold, Silver and Crystal, in every language including Korean Gold/Silver. The downloaded save has the same format as the one you loaded, so a cartridge dump can go back onto the cartridge.
+
 ### Gen 2 Trading (Gold/Silver/Crystal)
 - Go to the Pokémon Center Cable Club.
 - Select "Start trade".
@@ -63,4 +75,5 @@ Ported to Web by Starlark for easier access and wider device support.
 Like the original project, this web port attempts to includes sanity checks to ensure that data received from other players (or the server) is valid and won't crash your game or corrupt your save.
 
 ## Credits
+- The emulator is [mGBA](https://mgba.io) 0.10.5 by Jeffrey Pfau and contributors, used under the Mozilla Public License 2.0 (`emulator/LICENSE-mGBA.txt`). Its source is at [github.com/mgba-emu/mgba](https://github.com/mgba-emu/mgba/tree/0.10.5).
 - Flags in the language list on Windows use the Twemoji Country Flags font from [country-flag-emoji-polyfill](https://github.com/talkjs/country-flag-emoji-polyfill) by TalkJS (MIT). The flag art is from [Twemoji](https://github.com/twitter/twemoji), used under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/). Both licenses are in `fonts/LICENSE.md`.

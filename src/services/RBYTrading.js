@@ -9,9 +9,9 @@
  * - No eggs, no mail
  */
 
-import { GSCTrading } from './GSCTrading.js?v=93';
-import { RBYUtils } from './RBYUtils.js?v=93';
-import { RBYTradingData, RBYChecks } from './RBYTradingDataUtils.js?v=93';
+import { GSCTrading } from './GSCTrading.js?v=98';
+import { RBYUtils } from './RBYUtils.js?v=98';
+import { RBYTradingData, RBYChecks } from './RBYTradingDataUtils.js?v=98';
 
 export class RBYTrading extends GSCTrading {
     constructor(usb, ws, logger, tradeType = 'pool', isBuffered = false, doSanityChecks = true, options = {}) {

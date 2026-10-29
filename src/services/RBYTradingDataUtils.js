@@ -4,11 +4,11 @@
  * mail, no eggs).
  */
 
-import { RBYUtils } from './RBYUtils.js?v=93';
-import { GSCTradingText, GSCTradingData } from './GSCTradingDataUtils.js?v=93';
-import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=93';
-import { GSCUtilsMisc } from './GSCUtils.js?v=93';
-import { RBYChecks } from './RBYChecks.js?v=93';
+import { RBYUtils } from './RBYUtils.js?v=98';
+import { GSCTradingText, GSCTradingData } from './GSCTradingDataUtils.js?v=98';
+import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=98';
+import { GSCUtilsMisc } from './GSCUtils.js?v=98';
+import { RBYChecks } from './RBYChecks.js?v=98';
 
 export { RBYChecks };
 
