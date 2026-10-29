@@ -1,15 +1,17 @@
 
-import { UsbConnection, CMD, MODE } from '../services/UsbConnection.js?v=92';
-import { SerialConnection } from '../services/SerialConnection.js?v=92';
-import { BgbConnection } from '../services/BgbConnection.js?v=92';
-import { WebSocketClient } from '../services/WebSocketClient.js?v=92';
-import { RBYTrading } from '../services/RBYTrading.js?v=92';
-import { GSCTrading } from '../services/GSCTrading.js?v=92';
-import { RBYBattling } from '../services/RBYBattling.js?v=92';
-import { GSCBattling } from '../services/GSCBattling.js?v=92';
-import { SettingsManager } from '../services/SettingsManager.js?v=92';
-import { multiboot } from '../services/Multiboot.js?v=92';
-import { RSESPTrading } from '../services/RSESPTrading.js?v=92';
+import { UsbConnection, CMD, MODE } from '../services/UsbConnection.js?v=93';
+import { SerialConnection } from '../services/SerialConnection.js?v=93';
+import { BgbConnection } from '../services/BgbConnection.js?v=93';
+import { WebSocketClient } from '../services/WebSocketClient.js?v=93';
+import { RBYTrading } from '../services/RBYTrading.js?v=93';
+import { GSCTrading } from '../services/GSCTrading.js?v=93';
+import { GSCTradingKOR } from '../services/GSCTradingKOR.js?v=93';
+import { TradingProtocol } from '../services/TradingProtocol.js?v=93';
+import { RBYBattling } from '../services/RBYBattling.js?v=93';
+import { GSCBattling } from '../services/GSCBattling.js?v=93';
+import { SettingsManager } from '../services/SettingsManager.js?v=93';
+import { multiboot } from '../services/Multiboot.js?v=93';
+import { RSESPTrading } from '../services/RSESPTrading.js?v=93';
 
 export class AppUI {
     constructor() {
@@ -28,6 +30,7 @@ export class AppUI {
             tradeTypeGroup: document.getElementById('trade-type-group'),
             tradeTypeSelectGroup: document.getElementById('trade-type-select'),
             gameVersions: document.getElementById('game-versions'),
+            gameLanguage: document.getElementById('game-language'),
             btnTimeCapsule: document.getElementById('btn-time-capsule'),
             roomCodeGroup: document.getElementById('room-code-group'),
             roomCode: document.getElementById('room-code'),
@@ -50,15 +53,17 @@ export class AppUI {
             btnResetDefaults: document.getElementById('btn-reset-defaults'),
             btnSaveSettings: document.getElementById('btn-save-settings'),
             settingServerUrl: document.getElementById('setting-server-url'),
-            settingJapanese: document.getElementById('setting-japanese'),
-            settingDefaultNames: document.getElementById('setting-default-names'),
+            settingProfanityFilter: document.getElementById('setting-profanity-filter'),
+            settingTradeMonNames: document.getElementById('setting-trade-mon-names'),
+            settingTradeTrainerNames: document.getElementById('setting-trade-trainer-names'),
+            settingBattleMonNames: document.getElementById('setting-battle-mon-names'),
+            settingBattleTrainerNames: document.getElementById('setting-battle-trainer-names'),
             settingSanityChecks: document.getElementById('setting-sanity-checks'),
             settingVerbose: document.getElementById('setting-verbose'),
             settingDarkMode: document.getElementById('setting-dark-mode'),
             settingBuffered: document.getElementById('setting-buffered'),
             settingCrashSync: document.getElementById('setting-crash-sync'),
             settingBattleTurnTime: document.getElementById('setting-battle-turn-time'),
-            settingBattleNames: document.getElementById('setting-battle-names'),
             battleWaitCard: document.getElementById('battle-wait-card'),
             battleWaitText: document.getElementById('battle-wait-text'),
             btnBattleSkipWait: document.getElementById('btn-battle-skip-wait'),
@@ -127,6 +132,7 @@ export class AppUI {
         this.elements.genSelectGroup.querySelectorAll('.btn-option').forEach(btn => {
             btn.addEventListener('click', () => this.onGenSelect(btn));
         });
+        this.elements.gameLanguage.addEventListener('change', () => this.onLanguageSelect());
         this.elements.tradeTypeSelectGroup.querySelectorAll('.btn-option').forEach(btn => {
             btn.addEventListener('click', () => this.onTradeTypeSelect(btn));
         });
@@ -142,11 +148,12 @@ export class AppUI {
         });
 
         const settingInputs = [
-            this.elements.settingServerUrl, this.elements.settingJapanese, this.elements.settingDefaultNames,
+            this.elements.settingServerUrl, this.elements.settingProfanityFilter,
+            this.elements.settingTradeMonNames, this.elements.settingTradeTrainerNames,
+            this.elements.settingBattleMonNames, this.elements.settingBattleTrainerNames,
             this.elements.settingSanityChecks, this.elements.settingVerbose,
             this.elements.settingDarkMode, this.elements.settingBuffered,
             this.elements.settingCrashSync, this.elements.settingBattleTurnTime,
-            this.elements.settingBattleNames,
             this.elements.settingMaxLevel,
             this.elements.settingMaxLevelSlider, this.elements.settingConvertEggs
         ];
@@ -173,15 +180,18 @@ export class AppUI {
     loadSettingsToUI() {
         const s = this.settings.getAll();
         this.elements.settingServerUrl.value = s.serverUrl;
-        this.elements.settingJapanese.checked = s.isJapanese;
-        this.elements.settingDefaultNames.checked = s.defaultReceivedNames;
+        this.updateLanguagePicker();
+        this.elements.settingProfanityFilter.checked = s.profanityFilter;
+        this.elements.settingTradeMonNames.checked = s.tradeDefaultPokemonNames;
+        this.elements.settingTradeTrainerNames.checked = s.tradeDefaultTrainerNames;
+        this.elements.settingBattleMonNames.checked = s.battleDefaultPokemonNames;
+        this.elements.settingBattleTrainerNames.checked = s.battleDefaultTrainerNames;
         this.elements.settingSanityChecks.checked = s.doSanityChecks;
         this.elements.settingVerbose.checked = s.verbose;
         this.elements.settingDarkMode.checked = s.darkMode;
         this.elements.settingBuffered.checked = s.isBuffered;
         this.elements.settingCrashSync.checked = s.crashOnSyncDrop;
         this.elements.settingBattleTurnTime.value = s.battleTurnTime;
-        this.elements.settingBattleNames.checked = s.defaultBattleNames;
         this.elements.settingMaxLevel.value = s.maxLevel;
         this.elements.settingMaxLevelSlider.value = s.maxLevel;
         this.elements.settingConvertEggs.checked = s.convertToEggs;
@@ -190,8 +200,11 @@ export class AppUI {
 
     saveSettings() {
         this.settings.set('serverUrl', this.elements.settingServerUrl.value.trim());
-        this.settings.set('isJapanese', this.elements.settingJapanese.checked);
-        this.settings.set('defaultReceivedNames', this.elements.settingDefaultNames.checked);
+        this.settings.set('profanityFilter', this.elements.settingProfanityFilter.checked);
+        this.settings.set('tradeDefaultPokemonNames', this.elements.settingTradeMonNames.checked);
+        this.settings.set('tradeDefaultTrainerNames', this.elements.settingTradeTrainerNames.checked);
+        this.settings.set('battleDefaultPokemonNames', this.elements.settingBattleMonNames.checked);
+        this.settings.set('battleDefaultTrainerNames', this.elements.settingBattleTrainerNames.checked);
         this.settings.set('doSanityChecks', this.elements.settingSanityChecks.checked);
         this.settings.set('verbose', this.elements.settingVerbose.checked);
         this.settings.set('darkMode', this.elements.settingDarkMode.checked);
@@ -199,7 +212,6 @@ export class AppUI {
         this.settings.set('crashOnSyncDrop', this.elements.settingCrashSync.checked);
         const battleTurnTime = Math.max(0, parseInt(this.elements.settingBattleTurnTime.value) || 0);
         this.settings.set('battleTurnTime', battleTurnTime);
-        this.settings.set('defaultBattleNames', this.elements.settingBattleNames.checked);
         this.elements.settingBattleTurnTime.value = battleTurnTime;
         const maxLevel = Math.max(5, Math.min(100, parseInt(this.elements.settingMaxLevel.value) || 100));
         this.settings.set('maxLevel', maxLevel);
@@ -211,20 +223,28 @@ export class AppUI {
         this.closeSettings();
     }
 
-    resetToDefaults() { this.settings.resetToDefaults(); this.loadSettingsToUI(); this.log('Settings reset to defaults.'); }
+    resetToDefaults() {
+        const language = this.settings.get('language');
+        this.settings.resetToDefaults();
+        this.settings.set('language', language);
+        this.loadSettingsToUI();
+        this.log('Settings reset to defaults.');
+    }
 
     updateDefaultIndicators() {
         const mappings = {
             'serverUrl': this.elements.settingServerUrl.value,
-            'isJapanese': this.elements.settingJapanese.checked,
-            'defaultReceivedNames': this.elements.settingDefaultNames.checked,
+            'profanityFilter': this.elements.settingProfanityFilter.checked,
+            'tradeDefaultPokemonNames': this.elements.settingTradeMonNames.checked,
+            'tradeDefaultTrainerNames': this.elements.settingTradeTrainerNames.checked,
+            'battleDefaultPokemonNames': this.elements.settingBattleMonNames.checked,
+            'battleDefaultTrainerNames': this.elements.settingBattleTrainerNames.checked,
             'doSanityChecks': this.elements.settingSanityChecks.checked,
             'verbose': this.elements.settingVerbose.checked,
             'darkMode': this.elements.settingDarkMode.checked,
             'isBuffered': this.elements.settingBuffered.checked,
             'crashOnSyncDrop': this.elements.settingCrashSync.checked,
             'battleTurnTime': Math.max(0, parseInt(this.elements.settingBattleTurnTime.value) || 0),
-            'defaultBattleNames': this.elements.settingBattleNames.checked,
             'maxLevel': parseInt(this.elements.settingMaxLevel.value) || 100,
             'convertToEggs': this.elements.settingConvertEggs.checked
         };
@@ -244,6 +264,9 @@ export class AppUI {
 
     // === Generation / Trade Type ===
 
+    static ENGLISH_LANGUAGE = 2;
+    static KOREAN_LANGUAGE = 6;
+
     static GAME_VERSIONS = {
         '1': 'Red, Blue, Green, Yellow',
         '2': 'Gold, Silver, Crystal',
@@ -257,6 +280,7 @@ export class AppUI {
         this.selectedGen = btn.dataset.value;
         this.elements.tradeTypeGroup.style.display = 'block';
         this.elements.gameVersions.textContent = AppUI.GAME_VERSIONS[this.selectedGen] || '';
+        this.updateLanguagePicker();
         this.elements.btnTimeCapsule.style.display = (this.selectedGen === '2') ? 'inline-block' : 'none';
         if (this.selectedGen !== '2') {
             this.isTimeCapsule = false;
@@ -266,6 +290,31 @@ export class AppUI {
         this.elements.btnSendMultiboot.style.display = (this.selectedGen === '3') ? 'inline-block' : 'none';
         this.updateBattleAvailability();
         this.updateRoomCodeVisibility();
+    }
+
+    onLanguageSelect() {
+        this.settings.set('language', parseInt(this.elements.gameLanguage.value, 10));
+        this.log(`Game language set to ${this.languageName(this.selectedGen)}.`);
+    }
+
+    // Korean games exist only for Gen 2
+    gameLanguage(gen) {
+        const language = this.settings.get('language');
+        return (gen === '1' && language === AppUI.KOREAN_LANGUAGE) ? AppUI.ENGLISH_LANGUAGE : language;
+    }
+
+    languageName(gen) {
+        return GSCTrading.LANGUAGE_NAMES[this.gameLanguage(gen)] ?? '';
+    }
+
+    // Gen 3 Pokémon carry their own language
+    updateLanguagePicker() {
+        const select = this.elements.gameLanguage;
+        const korean = select.querySelector(`option[value="${AppUI.KOREAN_LANGUAGE}"]`);
+        korean.hidden = korean.disabled = (this.selectedGen === '1');
+        select.disabled = (this.selectedGen === '3');
+        select.title = select.disabled ? 'Gen 3 games don\'t need this' : '';
+        select.value = select.disabled ? 'auto' : String(this.gameLanguage(this.selectedGen));
     }
 
     onTradeTypeSelect(btn) {
@@ -371,8 +420,9 @@ export class AppUI {
         this.elements.logContainer.scrollTop = this.elements.logContainer.scrollHeight;
         if (this.settings.get('verbose')) console.log(msg);
 
-        // Mirror errors into the status row so they surface with the log hidden
-        if (msg.startsWith('[ERROR]')) {
+        // Mirror errors into the status row so they surface with the log hidden,
+        // without replacing a more specific error already shown this session
+        if (msg.startsWith('[ERROR]') && this.elements.statusIndicator.dataset.type !== 'error') {
             this.setStatus(msg.replace('[ERROR]', '').trim(), 'error');
         }
     }
@@ -463,6 +513,7 @@ export class AppUI {
                     return false;
                 }
                 roomCode = roomCode.padStart(5, '0');
+                this.roomCode = roomCode;
                 if (this.selectedTradeType === 'battle') {
                     url += `/bttl${this.selectedGen}/${roomCode}`;
                 } else {
@@ -484,12 +535,14 @@ export class AppUI {
             if (this.usb && this.usb.isConnected) {
                 try { await this.usb.disconnect(); } catch (_) {}
             }
+            this.connectionKind = kind;
             this.usb = kind === 'bgb' ? new BgbConnection(this._readBgbTarget())
                 : kind === 'serial' ? new SerialConnection() : new UsbConnection();
 
             this.log(kind === 'bgb' ? 'Connecting to BGB emulator...'
                 : `Requesting ${kind === 'serial' ? 'serial port' : 'USB device'}...`);
             await this.usb.connect();
+            if (kind === 'bgb') this.usb.onLinkLost = (message) => this.onTransportLost(message);
             this.elements.usbStatus.textContent = `Connected (${kind})`;
             this.elements.usbStatus.className = 'status connected';
             // Disable the connect button once a transport is open
@@ -503,6 +556,29 @@ export class AppUI {
             this.setStatus(kind === 'bgb' ? 'BGB connection failed' : 'Adapter connection failed', 'error',
                 error && error.message ? error.message : '');
         }
+    }
+
+    onTransportLost(message) {
+        this.elements.usbStatus.textContent = 'Disconnected';
+        this.elements.usbStatus.className = 'status disconnected';
+        this.elements.btnConnectUsb.disabled = false;
+        this.setStatus('BGB disconnected', 'error',
+            `${message}. Set BGB to Link > Listen again, then click Connect BGB.`);
+        this.log(`BGB disconnected: ${message}`);
+    }
+
+    /**
+     * Game language, name and filter options; battles have their own
+     * default-name settings.
+     */
+    languageOptions(gen, isBattle) {
+        return {
+            language: this.gameLanguage(gen),
+            profanityFilter: this.settings.get('profanityFilter'),
+            defaultPokemonNames: this.settings.get(isBattle ? 'battleDefaultPokemonNames' : 'tradeDefaultPokemonNames'),
+            defaultTrainerNames: this.settings.get(isBattle ? 'battleDefaultTrainerNames' : 'tradeDefaultTrainerNames'),
+            clientType: this.connectionKind === 'bgb' ? TradingProtocol.CLIENT_TYPE_JS_EMU_BGB : TradingProtocol.CLIENT_TYPE_JS_USB,
+        };
     }
 
     _readBgbTarget() {
@@ -534,6 +610,12 @@ export class AppUI {
 
     async startTrade() {
         if (this.isTradeActive) { await this.stopTrade(); return; }
+        // WebUSB doesn't track isConnected; BGB and serial report a lost link here
+        if (!this.usb || this.usb.isConnected === false) {
+            this.setStatus(this.transport === 'bgb' ? 'BGB is not connected' : 'Adapter is not connected', 'error',
+                this.transport === 'bgb' ? 'Click Connect BGB first.' : 'Connect your adapter first.');
+            return;
+        }
 
         // Wait out any previous trade loop still unwinding so two loops never
         // interleave reads on the same adapter.
@@ -593,15 +675,15 @@ export class AppUI {
             await this.usb.setTimingConfig(36, 4);
         }
 
-        this.log(`Starting ${tradeType} trade for Gen ${gen} (${isBuffered ? 'buffered' : 'sync'} mode)...`);
+        const game = (gen === '3') ? `Gen ${gen}` : `Gen ${gen}, ${this.languageName(gen)} game`;
+        this.log(`Starting ${tradeType} trade for ${game} (${isBuffered ? 'buffered' : 'sync'} mode)...`);
 
         if (tradeType === 'battle') {
             const battleOptions = {
-                isJapanese: this.settings.get('isJapanese'),
+                ...this.languageOptions(gen, true),
                 verbose: this.settings.get('verbose'),
                 crashOnSyncDrop: this.settings.get('crashOnSyncDrop'),
                 battleTurnTime: this.settings.get('battleTurnTime'),
-                defaultReceivedNames: this.settings.get('defaultBattleNames'),
                 negotiationPrompt: (peerMode) => this.showNegotiationPrompt(peerMode)
             };
             this.protocol = (gen === '1')
@@ -612,8 +694,7 @@ export class AppUI {
         } else if (gen === '1') {
             this.protocol = new RBYTrading(this.usb, this.ws, (msg) => this.log(msg),
                 tradeType, isBuffered, doSanityChecks, {
-                isJapanese: this.settings.get('isJapanese'),
-                defaultReceivedNames: this.settings.get('defaultReceivedNames'),
+                ...this.languageOptions(gen, false),
                 verbose: this.settings.get('verbose'),
                 maxLevel: this.settings.get('maxLevel'),
                 crashOnSyncDrop: this.settings.get('crashOnSyncDrop'),
@@ -624,18 +705,17 @@ export class AppUI {
                 this.log('Time Capsule mode: Using Gen 1 protocol');
                 this.protocol = new RBYTrading(this.usb, this.ws, (msg) => this.log(msg),
                     tradeType, isBuffered, doSanityChecks, {
-                    isJapanese: this.settings.get('isJapanese'),
-                    defaultReceivedNames: this.settings.get('defaultReceivedNames'),
+                    ...this.languageOptions(gen, false),
                     verbose: this.settings.get('verbose'),
                     maxLevel: this.settings.get('maxLevel'),
                     crashOnSyncDrop: this.settings.get('crashOnSyncDrop'),
                     negotiationPrompt: (peerMode) => this.showNegotiationPrompt(peerMode)
                 });
             } else {
-                this.protocol = new GSCTrading(this.usb, this.ws, (msg) => this.log(msg),
+                const GSCClass = this.gameLanguage(gen) === AppUI.KOREAN_LANGUAGE ? GSCTradingKOR : GSCTrading;
+                this.protocol = new GSCClass(this.usb, this.ws, (msg) => this.log(msg),
                     tradeType, isBuffered, doSanityChecks, {
-                    isJapanese: this.settings.get('isJapanese'),
-                    defaultReceivedNames: this.settings.get('defaultReceivedNames'),
+                    ...this.languageOptions(gen, false),
                     verbose: this.settings.get('verbose'),
                     crashOnSyncDrop: this.settings.get('crashOnSyncDrop'),
                     maxLevel: this.settings.get('maxLevel'),
@@ -646,6 +726,8 @@ export class AppUI {
         } else if (gen === '3') {
             this.protocol = new RSESPTrading(this.usb, this.ws, (msg) => this.log(msg),
                 tradeType, isBuffered, doSanityChecks, {
+                ...this.languageOptions(gen, false),
+                convertToEggs: this.settings.get('convertToEggs'),
                 verbose: this.settings.get('verbose'),
                 maxLevel: this.settings.get('maxLevel')
             });
@@ -653,6 +735,7 @@ export class AppUI {
 
         // Status + progress hooks for the status panel (log is hidden by default)
         const protocol = this.protocol;
+        if (tradeType !== 'pool') protocol.room = this.roomCode;
         protocol.onStatus = (text, type = 'active', detail = '') => this.setStatus(text, type, detail);
         protocol.onProgress = (sectionIndex, done, total) => {
             const names = protocol.SECTION_NAMES || [];
@@ -671,6 +754,7 @@ export class AppUI {
         this.ws.onDisconnect = () => {
             if (!protocol.stopTrade) {
                 this.log('Server connection lost - stopping.');
+                this.setStatus('Server connection lost', 'error', 'The trade server closed the connection. Press Start to connect again.');
                 protocol.stopTrade = true;
             }
         };

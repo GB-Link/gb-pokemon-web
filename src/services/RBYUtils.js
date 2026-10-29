@@ -3,7 +3,9 @@
  * Extends GSCUtils with RBY-specific constants and methods.
  */
 
-import { GSCUtils } from './GSCUtils.js?v=92';
+import { GSCUtils } from './GSCUtils.js?v=93';
+import { RBYPokemonInfo } from './RBYTradingDataUtils.js?v=93';
+import { RBYChecks } from './RBYChecks.js?v=93';
 
 export class RBYUtils extends GSCUtils {
     // ==================== RBY-SPECIFIC STRUCTURE CONSTANTS ====================
@@ -48,6 +50,96 @@ export class RBYUtils extends GSCUtils {
     static stat_id_base_conv_table = [0, 1, 2, 3, 4];
     static stat_id_iv_conv_table = [0, 0, 1, 2, 3];
     static stat_id_exp_conv_table = [0, 1, 2, 3, 4];
+    static NUM_STATS = 5;
+    static STAT_ID_BASE_CONV_TABLE = [0, 1, 2, 3, 4];
+    static STAT_ID_IV_CONV_TABLE = [0, 0, 1, 2, 3];
+    static STAT_ID_EXP_CONV_TABLE = [0, 1, 2, 3, 4];
+
+    // Gen 1 tables, kept apart from the inherited Gen 2 ones
+    static loaded = false;
+    static baseStats = null;
+    static expGroups = null;
+    static expLists = null;
+    static evolutionIds = null;
+    static mailIds = null;
+    static learnsets = null;
+    static noMailSectionOld = null;
+    static baseRandomSection = null;
+    static eggNick = null;
+    static textConv = null;
+    static pokemonNames = null;
+    static movesPpList = null;
+    static badIdsTextSpecialToKor = null;
+    static badIdsTextSpecialFromKor = null;
+    static badIdsTextKorFullList = null;
+    static typesList = null;
+
+    static async load() {
+        if (Object.prototype.hasOwnProperty.call(this, 'loaded') && this.loaded) return true;
+        const loaded = await super.load();
+        if (!loaded) return false;
+        const types = await this.loadBinaryFile('types.bin');
+        this.typesList = types ? this.prepareTypes(types) : null;
+        return true;
+    }
+
+    static prepareTypes(data) {
+        const ret = new Array(0x100);
+        for (let i = 0; i < 0x100; i++) ret[i] = Array.from(data.slice(i * 2, (i + 1) * 2));
+        return ret;
+    }
+
+    static isEvolving(species, item) {
+        if (species >= 0x100 || species < 0) return false;
+        return Boolean(this.evolutionIds && this.evolutionIds[species][0]);
+    }
+
+    // In Gen 1 -> Gen 2 the Everstone only stops the evolution on one side
+    static getEvolution(species, item) {
+        if (!this.isEvolving(species, item)) return null;
+        if (item === this.EVERSTONE_ID) return species;
+        return this.evolutionIds[species][2];
+    }
+
+    static getPatchSetNumIndex(isMail, isJapanese, isOldMailData) {
+        return [2, 0];
+    }
+
+    static getSinglePokemonInfoClass() {
+        return RBYPokemonInfo;
+    }
+
+    /**
+     * Sanity-check a single-Pokémon record.
+     * @returns {Array|null} [mon, false]
+     */
+    static singleMonFromData(checks, data) {
+        let ret = null;
+        checks.resetSpeciesItemList();
+        checks.setSingleTeamSize();
+        checks.resetTextBuffers();
+        checks.preparePatchSetsBuffer();
+        checks.prepareSpeciesBuffer();
+        const checker = checks.singlePokemonChecksMap;
+
+        if (data.length >= checker.length) {
+            checks.speciesCleaner(data[0]);
+            checks.prepareSpeciesBuffer();
+            const purifiedData = checks.applyChecksToData(checker, data);
+            const raw = RBYPokemonInfo.setData(data);
+            const mon = RBYPokemonInfo.setData(purifiedData);
+            if (!mon.hasChangedSignificantly(raw)) ret = [mon, false];
+        }
+        return ret;
+    }
+
+    static singleMonToData(mon, isEgg) {
+        return mon.getData();
+    }
+
+    static getBasicChecks() {
+        return new RBYChecks([0, 0, 0], true, { useStrictLanguageChecks: true });
+    }
 
     // ==================== RBY SPECIAL POKEMON ====================
     // Legendary birds for special handling (Gen 1 dex numbers)
@@ -158,6 +250,10 @@ export class RBYUtils extends GSCUtils {
     // Base pool data (loaded by loadBasePoolData)
     static basePoolData = null;
     static BASE_FOLDER = '/data/rby/';
+    // Mail and egg tables are Gen 2 only
+    static ABSENT_FILES = new Set(['egg_nick.bin', 'japanese_mail_patch_set.bin', 'mail_checks_jp.bin',
+        'mail_conversion_table_en_to_jp.bin', 'mail_conversion_table_jp_to_en_int.bin',
+        'no_mail_section.bin', 'no_mail_section_old.bin']);
 
     /**
      * Load base section template from binary file.

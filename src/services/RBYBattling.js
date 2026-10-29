@@ -8,10 +8,10 @@
  * ghost party gets healed, and the battle-end probe waits for 0xFD.
  */
 
-import { GSCBattling } from './GSCBattling.js?v=92';
-import { RBYUtils } from './RBYUtils.js?v=92';
-import { RBYTradingData, RBYChecks } from './RBYTradingDataUtils.js?v=92';
-import { DefaultNames } from './DefaultNames.js?v=92';
+import { GSCBattling } from './GSCBattling.js?v=93';
+import { GSCTrading } from './GSCTrading.js?v=93';
+import { RBYUtils } from './RBYUtils.js?v=93';
+import { RBYTradingData, RBYChecks } from './RBYTradingDataUtils.js?v=93';
 
 export class RBYBattling extends GSCBattling {
     constructor(usb, ws, logger, tradeType = 'battle', isBuffered = false, doSanityChecks = true, options = {}) {
@@ -28,6 +28,7 @@ export class RBYBattling extends GSCBattling {
                 new Set(Array.from({ length: 0x10 }, (_, i) => 0x60 + i))
             ]
         ];
+        this.ROOM_SYNC_STATE = null;
         this.START_TRADING_STATES = [
             [0x60, 0x60],
             [
@@ -43,12 +44,7 @@ export class RBYBattling extends GSCBattling {
         this.SECTION_FILLERS = [{}, {}, {}];
         this.EXTRA_SECTION_DROPS = [0, 0, 0];
         if (this.isJapanese) {
-            const fillers = {};
-            fillers[6] = [5, 0x50]; // trainer name
-            for (let i = 0; i < 12; i++) { // 6 OT names + 6 nicknames
-                fillers[0x121 + i * 0x0B] = [5, 0x50];
-            }
-            this.SECTION_FILLERS[1] = fillers;
+            this.SECTION_FILLERS[1] = GSCTrading.jpNameFillers(0x120);
         }
 
         // ==================== RBY BATTLE MENU BYTES ====================
@@ -68,7 +64,7 @@ export class RBYBattling extends GSCBattling {
         this.healAfterNotValidBuffered = true;
         this.TIMEOUT_USER_CHOICE_NO_DATA_MS = 6000;
 
-        this.checks = new RBYChecks(this.SPECIAL_SECTIONS_LEN, doSanityChecks);
+        this.checks = new RBYChecks(this.SPECIAL_SECTIONS_LEN, doSanityChecks, this.checksOptions());
         this.jpMailConverter = null;
     }
 
@@ -83,6 +79,8 @@ export class RBYBattling extends GSCBattling {
     get MSG_BUF() { return "BUF1"; }
     get MSG_NEG() { return "NEG1"; }
     get MSG_VEC() { return "VEC1"; }
+    get MSG_LNG() { return "LNG1"; }
+    get MSG_CLN() { return "CLN1"; }
     get MSG_VES() { return "VES1"; }
     get MSG_RAN() { return "RAN1"; }
     get MSG_ASK() { return "ASK1"; }
@@ -102,20 +100,21 @@ export class RBYBattling extends GSCBattling {
         return { gen: 1, nicknamePos: 0x15D, otPos: 0x11B, speciesListPos: 0x0C, partySizePos: 0x0B, nameLength: 0x0B, trainerNamePos: 0x00 };
     }
 
+    createSendableBigTradingData() {
+        return this.ownPokemon.createTradingData(this.SPECIAL_SECTIONS_LEN);
+    }
+
     createPartyReader(partyBytes) {
         return new RBYTradingData(partyBytes);
     }
 
     async loadBattleData() {
-        if (this.doSanityChecks && this.checks.load) {
-            await this.checks.load();
-        }
+        await this.loadChecks();
         // RBYUtils inherits the gen 2 PP table, so the gen 1 one must
         // be loaded onto it explicitly before healing
         if (!Object.prototype.hasOwnProperty.call(RBYUtils, 'movesPpList') || !RBYUtils.movesPpList) {
             RBYUtils.movesPpList = await RBYUtils.loadBinaryFile('moves_pp_list.bin');
         }
-        if (this.defaultReceivedNames) await DefaultNames.load();
         await this.loadBattleBaseData();
     }
 

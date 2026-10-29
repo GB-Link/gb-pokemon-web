@@ -1,24 +1,55 @@
 /**
  * RBYTradingDataUtils.js - Data structures for Gen 1 (RBY) Pokemon trading.
- * Extends GSC data structures with RBY-specific formats.
+ * Extends the GSC structures with the Gen 1 layout (0x2C-byte Pokémon, no
+ * mail, no eggs).
  */
 
-import { RBYUtils } from './RBYUtils.js?v=92';
-import { GSCTradingText, GSCTradingPartyInfo, GSCTradingData } from './GSCTradingDataUtils.js?v=92';
-import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=92';
+import { RBYUtils } from './RBYUtils.js?v=93';
+import { GSCTradingText, GSCTradingData } from './GSCTradingDataUtils.js?v=93';
+import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=93';
+import { GSCUtilsMisc } from './GSCUtils.js?v=93';
+import { RBYChecks } from './RBYChecks.js?v=93';
+
+export { RBYChecks };
+
+export class RBYTradingText extends GSCTradingText {
+    getUtilsClass() {
+        return RBYUtils;
+    }
+}
 
 /**
  * RBY Pokemon info with Gen 1 specific structure (44 bytes vs 48 for GSC)
  */
 export class RBYPokemonInfo extends GSCPokemonInfo {
-    // RBY Pokemon data is 44 bytes (0x2C) vs 48 bytes (0x30) for GSC
+    static POKEMON_DATA_LEN = 0x2C;
+    static OT_NAME_LEN = 0x0B;
+    static NICKNAME_LEN = 0x0B;
+    static MAIL_LEN = 0;
+    static SENDER_LEN = 0;
+
+    static ITEM_POS = 7;
+    static MOVES_POS = 8;
+    static PPS_POS = 0x1D;
+    static LEVEL_POS = 0x21;
+    static EXP_POS = 0x0E;
+    static CURR_HP_POS = 1;
+    static STATS_POS = 0x22;
+    static EVS_POS = 0x11;
+    static IVS_POS = 0x1B;
+    static STATUS_POS = 4;
+    static REFERENCE_GEN = 1;
+
+    static NO_MOVES_EQUALITY_RANGES = [[0, 3], [4, 8], [0x0C, 0x1D], [0x21, 0x2C]];
+    static FULL_EQUALITY_RANGES = [[0, 0x2C]];
+    static ALL_LENGTHS = [0x2C, 0xB, 0xB, 0, 0];
+
+    // Older lowercase names
     static pokemon_data_len = 0x2C;
     static ot_name_len = 0x0B;
     static nickname_len = 0x0B;
-    static mail_len = 0;       // No mail in Gen 1
+    static mail_len = 0;
     static sender_len = 0;
-
-    // RBY-specific offsets
     static item_pos = 7;
     static moves_pos = 8;
     static pps_pos = 0x1D;
@@ -30,124 +61,39 @@ export class RBYPokemonInfo extends GSCPokemonInfo {
     static ivs_pos = 0x1B;
     static status_pos = 4;
 
-    constructor(data, start, length = RBYPokemonInfo.pokemon_data_len) {
-        super(data, start, length);
+    getUtilsClass() {
+        return RBYUtils;
     }
 
-    // Gen 1 struct accessors: the GSC getters read GSCPokemonInfo's own static
-    // offsets, so these must re-point moves/PP at the RBY positions (8 / 0x1D)
-    getMove(pos) {
-        return this.values[RBYPokemonInfo.moves_pos + pos];
+    getTextClass() {
+        return RBYTradingText;
     }
 
-    setMove(pos, val, maxPp = true) {
-        this.values[RBYPokemonInfo.moves_pos + pos] = val;
-        if (maxPp) {
-            const ppTable = this.getPpTable();
-            if (ppTable) {
-                this.setPP(pos, ppTable[val] || 0);
-            }
-        }
+    setFriendship(val = null) {
     }
 
-    getPP(pos) {
-        return this.values[RBYPokemonInfo.pps_pos + pos];
-    }
-
-    setPP(pos, val) {
-        this.values[RBYPokemonInfo.pps_pos + pos] = val;
-    }
-
-    getPpTable() {
-        return RBYUtils.movesPpList;
-    }
-
-    getCurrHp() {
-        return this.readShort(RBYPokemonInfo.curr_hp_pos);
-    }
-
-    setCurrHp(val) {
-        this.writeShort(RBYPokemonInfo.curr_hp_pos, val);
-    }
-
-    getMaxHp() {
-        return this.readShort(RBYPokemonInfo.stats_pos);
-    }
-
-    heal() {
-        this.setCurrHp(this.getMaxHp());
-        this.values[RBYPokemonInfo.status_pos] = 0;
-    }
-
-    faint() {
-        this.setCurrHp(0);
-        this.values[RBYPokemonInfo.status_pos] = 0;
-    }
-
-    /**
-     * Gen 1 has no hatching cycles (no eggs)
-     */
     setHatchingCycles(val = 1) {
-        // No-op for Gen 1
     }
 
     getHatchingCycles() {
-        return 0xFF; // Always return max (no eggs)
+        return 0xFF;
     }
 
-    /**
-     * Gen 1 has no mail
-     */
     addMail(data, start) {
-        // No-op for Gen 1
     }
 
     addMailSender(data, start) {
-        // No-op for Gen 1
     }
 
     hasMail() {
         return false;
     }
 
-    /**
-     * Create RBY Pokemon from data
-     */
     static setData(data) {
         const mon = new RBYPokemonInfo(data, 0);
-        // OT name and nickname are at different offsets for RBY
-        if (data.length >= RBYPokemonInfo.pokemon_data_len + RBYPokemonInfo.ot_name_len) {
-            mon.addOtName(data, RBYPokemonInfo.pokemon_data_len);
-        }
-        if (data.length >= RBYPokemonInfo.pokemon_data_len + RBYPokemonInfo.ot_name_len + RBYPokemonInfo.nickname_len) {
-            mon.addNickname(data, RBYPokemonInfo.pokemon_data_len + RBYPokemonInfo.ot_name_len);
-        }
+        mon.addOtName(data, mon.precalcedLengths[1]);
+        mon.addNickname(data, mon.precalcedLengths[2]);
         return mon;
-    }
-
-    /**
-     * Get Pokemon data as array for transmission
-     */
-    getData() {
-        const dataLen = RBYPokemonInfo.pokemon_data_len +
-            RBYPokemonInfo.ot_name_len +
-            RBYPokemonInfo.nickname_len;
-        const result = new Uint8Array(dataLen);
-
-        // Copy Pokemon struct
-        result.set(this.values.slice(0, RBYPokemonInfo.pokemon_data_len), 0);
-
-        // Copy OT name
-        if (this.otName) {
-            result.set(this.otName, RBYPokemonInfo.pokemon_data_len);
-        }
-
-        // Copy nickname
-        if (this.nickname) {
-            result.set(this.nickname, RBYPokemonInfo.pokemon_data_len + RBYPokemonInfo.ot_name_len);
-        }
-
-        return result;
     }
 }
 
@@ -155,7 +101,6 @@ export class RBYPokemonInfo extends GSCPokemonInfo {
  * RBY Trading Data - Party structure for Gen 1
  */
 export class RBYTradingData extends GSCTradingData {
-    // RBY-specific positions
     static TRADER_NAME_POS = 0;
     static TRADING_PARTY_INFO_POS = 0x0B;
     static TRADING_PARTY_FINAL_POS = 0x12;
@@ -163,176 +108,93 @@ export class RBYTradingData extends GSCTradingData {
     static TRADING_POKEMON_OT_POS = 0x11B;
     static TRADING_POKEMON_NICKNAME_POS = 0x15D;
 
-    // RBY data lengths
-    static TRADING_POKEMON_LENGTH = 0x2C;   // 44 bytes
-    static TRADING_NAME_LENGTH = 0x0B;      // 11 bytes
-    static TRADING_MAIL_LENGTH = 0;         // No mail
+    static TRADING_POKEMON_LENGTH = 0x2C;
+    static TRADING_NAME_LENGTH = 0x0B;
+    static TRADING_MAIL_LENGTH = 0;
     static TRADING_MAIL_SENDER_LENGTH = 0;
 
-    // Section lengths: [Random, Pokemon, Patches]
+    // Random, party, patches
     static SECTION_LENGTHS = [0x0A, 0x1A2, 0xC5];
+    static SECTION_LENGTHS_OLD = [0x0A, 0x1A2, 0xC5];
 
     constructor(dataPokemon, dataMail = null, doFull = true) {
-        // Don't call super with mail data since Gen 1 has no mail
         super(dataPokemon, null, doFull);
     }
 
-    /**
-     * Build Pokemon array for RBY (different offsets; no mail)
-     */
-    buildPokemonArray(dataPokemon, dataMail, doFull) {
-        this.pokemon = [];
-
-        if (doFull) {
-            for (let i = 0; i < this.getPartySize(); i++) {
-                const mon = new RBYPokemonInfo(
-                    dataPokemon,
-                    RBYTradingData.TRADING_POKEMON_POS + i * RBYTradingData.TRADING_POKEMON_LENGTH
-                );
-                mon.addOtName(
-                    dataPokemon,
-                    RBYTradingData.TRADING_POKEMON_OT_POS + i * RBYTradingData.TRADING_NAME_LENGTH
-                );
-                mon.addNickname(
-                    dataPokemon,
-                    RBYTradingData.TRADING_POKEMON_NICKNAME_POS + i * RBYTradingData.TRADING_NAME_LENGTH
-                );
-                // No mail in Gen 1
-                this.pokemon.push(mon);
-            }
-        }
+    monGeneratorClass() {
+        return RBYPokemonInfo;
     }
 
-    /**
-     * Search for a Pokemon - simplified for RBY (no egg check)
-     */
+    textGenerator(data, pos, length = this.constructor.TRADING_NAME_LENGTH) {
+        return new RBYTradingText(data, pos, length);
+    }
+
+    getTextClass() {
+        return RBYTradingText;
+    }
+
+    trainerInfoGenerator(data, pos) {
+        return null;
+    }
+
+    getUtilsClass() {
+        return RBYUtils;
+    }
+
     searchForMon(mon, isEgg) {
-        // Gen 1 has no eggs, so ignore isEgg parameter
         for (let i = 0; i < this.getPartySize(); i++) {
-            if (mon.isEqual(this.pokemon[i])) {
-                return i;
-            }
+            if (mon.isEqual(this.pokemon[i])) return i;
         }
-        // Weak comparison fallback
         for (let i = 0; i < this.getPartySize(); i++) {
-            if (mon.isEqual(this.pokemon[i], true)) {
-                return i;
-            }
+            if (mon.isEqual(this.pokemon[i], true)) return i;
         }
         return null;
     }
 
-    /**
-     * Is Pokemon an egg - always false for Gen 1
-     */
     isMonEgg(pos) {
         return false;
     }
 
-    /**
-     * Party has mail - always false for Gen 1
-     */
     partyHasMail() {
         return false;
     }
 
     /**
-     * Create trading data arrays for hardware (3 sections for RBY)
+     * @returns {boolean|null} null if it does not evolve; true when the
+     * player's input is needed: Gen 1 -> Gen 2 can't predict the new moves,
+     * and an Everstone only stops the Gen 1 side
      */
-    createTradingData() {
-        const lengths = RBYTradingData.SECTION_LENGTHS;
-        const data = [
-            new Uint8Array(lengths[0]),  // Random
-            new Uint8Array(lengths[1]),  // Pokemon
-            new Uint8Array(lengths[2])   // Patches
-            // No mail section
-        ];
-
-        // Section 1: Pokemon data
-        // Trader name
-        if (this.trader && this.trader.values) {
-            data[1].set(this.trader.values, RBYTradingData.TRADER_NAME_POS);
-        }
-
-        // Party size
-        data[1][RBYTradingData.TRADING_PARTY_INFO_POS] = this.getPartySize();
-
-        // Species list
-        if (this.partyInfo && this.partyInfo.actualMons) {
-            data[1].set(this.partyInfo.actualMons, RBYTradingData.TRADING_PARTY_INFO_POS + 1);
-        }
-
-        // Party final byte
-        data[1][RBYTradingData.TRADING_PARTY_FINAL_POS] = 0xFF;
-
-        // Pokemon data
-        for (let i = 0; i < this.getPartySize(); i++) {
-            const mon = this.pokemon[i];
-
-            // Pokemon struct
-            data[1].set(
-                mon.values.slice(0, RBYTradingData.TRADING_POKEMON_LENGTH),
-                RBYTradingData.TRADING_POKEMON_POS + i * RBYTradingData.TRADING_POKEMON_LENGTH
-            );
-
-            // OT Name
-            if (mon.otName) {
-                data[1].set(
-                    mon.otName,
-                    RBYTradingData.TRADING_POKEMON_OT_POS + i * RBYTradingData.TRADING_NAME_LENGTH
-                );
-            }
-
-            // Nickname
-            if (mon.nickname) {
-                data[1].set(
-                    mon.nickname,
-                    RBYTradingData.TRADING_POKEMON_NICKNAME_POS + i * RBYTradingData.TRADING_NAME_LENGTH
-                );
-            }
-        }
-
-        // Create patches (Section 2)
-        RBYUtils.createPatchesData(data[1], data[2], false);
-
-        return data;
-    }
-}
-
-/**
- * RBY Sanity Checks - Simplified for Gen 1 (no eggs, different species IDs)
- */
-export class RBYChecks {
-    static base_folder = "data/rby/";
-    static rattata_id = 0xA5;  // Rattata in Gen 1 internal order
-    static max_evs = 0xFFFF;
-    static max_ivs = 0xF;      // DVs in Gen 1 are 0-15
-
-    constructor(sectionSizes, doSanityChecks) {
-        this.sectionSizes = sectionSizes;
-        this.doSanityChecks = doSanityChecks;
-    }
-
-    /**
-     * No eggs in Gen 1
-     */
-    isEgg() {
+    evolveMon(pos, targetLanguage, ownLanguage) {
+        if (this.isPosInvalid(pos)) return false;
+        const mon = this.pokemon[pos];
+        const evolution = this.utilsClass.getEvolution(mon.getSpecies(), mon.getItem());
+        if (evolution === null) return null;
+        if (evolution === mon.getSpecies()) return true;
+        this.evolutionProcedure(pos, evolution, targetLanguage, ownLanguage);
+        if (mon.learnableMoves() !== null) return true;
         return false;
     }
 
     /**
-     * Load sanity check data files
+     * The sections for the hardware: [random, party, patches].
      */
-    async load() {
-        // RBY sanity checks would be loaded here
-        // For now, return true to indicate "loaded"
-        return true;
-    }
-
-    /**
-     * Reset state between trades
-     */
-    resetState() {
-        // Reset any stateful check data
+    createTradingData(lengths = null) {
+        const C = this.constructor;
+        if (lengths === null) lengths = C.SECTION_LENGTHS;
+        const data = [];
+        for (let i = 0; i < 3; i++) data.push(new Array(lengths[i]).fill(0));
+        GSCUtilsMisc.copyToData(data[1], C.TRADER_NAME_POS, this.trader.values, C.TRADING_NAME_LENGTH);
+        GSCUtilsMisc.setItem(data[1], C.TRADING_PARTY_INFO_POS, this.getPartySize());
+        GSCUtilsMisc.copyToData(data[1], C.TRADING_PARTY_INFO_POS + 1, this.partyInfo.actualMons);
+        GSCUtilsMisc.setItem(data[1], C.TRADING_PARTY_FINAL_POS, 0xFF);
+        for (let i = 0; i < this.getPartySize(); i++) {
+            const mon = this.pokemon[i];
+            GSCUtilsMisc.copyToData(data[1], C.TRADING_POKEMON_POS + (i * C.TRADING_POKEMON_LENGTH), mon.values);
+            GSCUtilsMisc.copyToData(data[1], C.TRADING_POKEMON_OT_POS + (i * C.TRADING_NAME_LENGTH), mon.otName.values, C.TRADING_NAME_LENGTH);
+            GSCUtilsMisc.copyToData(data[1], C.TRADING_POKEMON_NICKNAME_POS + (i * C.TRADING_NAME_LENGTH), mon.nickname.values, C.TRADING_NAME_LENGTH);
+        }
+        this.utilsClass.createPatchesData(data[1], data[2], false);
+        return data;
     }
 }
+

@@ -1,34 +1,46 @@
 
-import { TradingProtocol } from './TradingProtocol.js?v=92';
-import { GSCUtils } from './GSCUtils.js?v=92';
-import { GSCChecks } from './GSCChecks.js?v=92';
-import { GSCJPMailConverter } from './GSCJPMailConverter.js?v=92';
-import { DefaultNames } from './DefaultNames.js?v=92';
+import { TradingProtocol } from './TradingProtocol.js?v=93';
+import { GSCUtils } from './GSCUtils.js?v=93';
+import { GSCChecks } from './GSCChecks.js?v=93';
+import { GSCJPMailConverter } from './GSCJPMailConverter.js?v=93';
+import { GSCTradingData } from './GSCTradingDataUtils.js?v=93';
 
 export class GSCTrading extends TradingProtocol {
+    static JAPANESE_LANGUAGE = 1;
+    static ENGLISH_LANGUAGE = 2;
+    static KOREAN_LANGUAGE = 6;
+    static SERVER_LANGUAGE = 0xFF;
+    static FORCE_BUFFERED_VALUE = 0x91;
+    static LANGUAGE_NAMES = { 1: 'Japanese', 2: 'English', 3: 'French', 4: 'Italian', 5: 'German', 6: 'Korean', 7: 'Spanish' };
+
     constructor(usb, ws, logger, tradeType = 'pool', isBuffered = false, doSanityChecks = true, options = {}) {
         super(usb, ws, logger);
 
-        // Sanity checks instance - validates/sanitizes incoming Pokemon data
-        this.checks = new GSCChecks(doSanityChecks);
         this.doSanityChecks = doSanityChecks;
 
         // Additional settings from options
-        this.isJapanese = options.isJapanese ?? false;
+        this.language = options.language ?? (options.isJapanese ? GSCTrading.JAPANESE_LANGUAGE : GSCTrading.ENGLISH_LANGUAGE);
+        this.isJapanese = this.language === GSCTrading.JAPANESE_LANGUAGE;
+        this.profanityFilter = options.profanityFilter ?? true;
+        this.defaultPokemonNames = options.defaultPokemonNames ?? false;
+        this.defaultTrainerNames = options.defaultTrainerNames ?? false;
+        this.clientType = options.clientType ?? TradingProtocol.CLIENT_TYPE_JS_USB;
+        // Set by the version check: a 4.2.0+ peer uses the 0x41-byte mail
+        // layout, the extended sync positions and sends its game language
+        this.isGen2NewMail = false;
+        this.isNewSynchProtocol = false;
+        this.otherLanguage = null;
+        this.otherClientType = null;
         this.verbose = options.verbose ?? false;
         this.crashOnSyncDrop = options.crashOnSyncDrop ?? true;
         this.maxLevel = options.maxLevel ?? 100;
         this.convertToEggs = options.convertToEggs ?? false;
-        // Received Pokemon get the default species name of this game's language
-        this.defaultReceivedNames = options.defaultReceivedNames ?? false;
 
         // Negotiation prompt callback - called when user needs to decide whether to switch modes
         // Should return a Promise that resolves to true (switch) or false (keep)
         // If not provided, auto-accepts the other player's mode
         this.negotiationPrompt = options.negotiationPrompt ?? null;
 
-        // Japanese mail converter - for converting mail between JP and International formats
-        this.jpMailConverter = this.isJapanese ? new GSCJPMailConverter() : null;
 
         // Trade configuration
         this.tradeType = tradeType;    // 'pool' or 'link'
@@ -56,7 +68,10 @@ export class GSCTrading extends TradingProtocol {
             ]
         ];
 
-        this.SPECIAL_SECTIONS_LEN = [0xA, 0x1BC, 0xC5, 0x181]; // Random, Pokemon, Patches, Mail (Matches ref impl)
+        // Random, Pokemon, Patches, Mail. Mail is held in the 0x41-byte message
+        // layout; pre-4.2.0 peers exchange the 0x21-byte one
+        this.SPECIAL_SECTIONS_LEN = [0xA, 0x1BC, 0xC5, 0x241];
+        this.SPECIAL_SECTIONS_LEN_OLD = [0xA, 0x1BC, 0xC5, 0x181];
         this.SECTION_NAMES = ['Random data', 'Party data', 'Patch data', 'Mail data']; // UI progress labels
         this.SPECIAL_SECTIONS_PREAMBLE_LEN = [7, 6, 3, 5]; // Random, Pokemon, Patches, Mail (Matches ref impl)
 
@@ -68,14 +83,11 @@ export class GSCTrading extends TradingProtocol {
         // Extra no-data device exchanges after a buffered section read
         // (Python drop_bytes_checks[2]).
         this.EXTRA_SECTION_DROPS = [0, 0, 0, 0, 0];
+        this.jpNameSixthBytes = null;
         if (this.isJapanese) {
-            const fillers = {};
-            fillers[6] = [5, 0x50]; // trainer name
-            for (let i = 0; i < 12; i++) { // 6 OT names + 6 nicknames
-                fillers[0x13B + i * 0x0B] = [5, 0x50];
-            }
-            this.SECTION_FILLERS[1] = fillers;
+            this.SECTION_FILLERS[1] = GSCTrading.jpNameFillers(0x13A);
             this.EXTRA_SECTION_DROPS[1] = 4;
+            this.jpNameSixthBytes = GSCTrading.jpNameSixthBytes(0x13A);
         }
 
         // drop_bytes_checks: [[start_positions], [bad_bytes]]
@@ -140,6 +152,40 @@ export class GSCTrading extends TradingProtocol {
         // Offset of held item in Pokemon data (within the 48-byte Pokemon structure)
         // From gsc_trading_data_utils.py: item_pos = 1 (second byte)
         this.POKEMON_ITEM_OFFSET = 1;
+
+        // The checks carry the language, default-name and profanity options
+        this.checks = this.createChecks(doSanityChecks);
+        this.jpMailConverter = this.isJapanese ? new GSCJPMailConverter(this.checks) : null;
+        this.fedSections = [];
+    }
+
+    checksOptions() {
+        return {
+            language: this.language,
+            setDefaultNickname: this.defaultPokemonNames,
+            setDefaultOt: this.defaultTrainerNames,
+            setDefaultPartner: this.defaultTrainerNames,
+            doProfanityChecks: this.profanityFilter,
+        };
+    }
+
+    createChecks(doSanityChecks) {
+        return new GSCChecks(this.SPECIAL_SECTIONS_LEN, doSanityChecks,
+            { ...this.checksOptions(), sectionSizesOld: this.SPECIAL_SECTIONS_LEN_OLD });
+    }
+
+    /**
+     * The checks always run: default names and the profanity filter apply
+     * even with the sanity checks off.
+     */
+    async loadChecks() {
+        const loaded = await this.checks.load();
+        if (!loaded) {
+            this.log('[WARN] Could not load sanity check data, continuing without checks');
+            this.checks.doSanityChecks = false;
+        }
+        if (this.jpMailConverter) await this.jpMailConverter.load();
+        return loaded;
     }
 
     // ==================== MESSAGE TAG GETTERS ====================
@@ -156,6 +202,8 @@ export class GSCTrading extends TradingProtocol {
     get MSG_SUC() { return "SUC2"; }
     get MSG_VEC() { return "VEC2"; }
     get MSG_VES() { return "VES2"; }
+    get MSG_LNG() { return "LNG2"; }
+    get MSG_CLN() { return "CLN2"; }
     get MSG_RAN() { return "RAN2"; }
 
     /**
@@ -197,44 +245,29 @@ export class GSCTrading extends TradingProtocol {
     }
 
     /**
-     * Default nickname field for a slot of a party section (peer's party),
-     * from the Gen3-to-Gen-X derivation for this game's language.
+     * Whether a party byte belongs to a name the checks replace with the
+     * game's default (trainer and OT names follow the trainer option).
      */
-    defaultNameFieldForSlot(partyBytes, slot) {
+    isDefaultedNamePos(pos) {
         const L = this.NAME_LAYOUT;
-        const listEntry = partyBytes[L.speciesListPos + slot];
-        const isEgg = L.gen === 2 && listEntry === GSCUtils.EGG_ID;
-        return DefaultNames.getDefaultNameField(L.gen, listEntry, isEgg, this.isJapanese);
+        if (this.defaultTrainerNames) {
+            if (pos >= L.trainerNamePos && pos < L.trainerNamePos + L.nameLength) return true;
+            if (pos >= L.otPos && pos < L.otPos + 6 * L.nameLength) return true;
+        }
+        return this.defaultPokemonNames && pos >= L.nicknamePos && pos < L.nicknamePos + 6 * L.nameLength;
+    }
+
+    get replacesNames() {
+        return this.defaultPokemonNames || this.defaultTrainerNames;
     }
 
     /**
-     * Rewrite every nickname of a party section to the default species name.
-     * Used for the buffered/pool feed paths (in place, idempotent).
+     * The game itself restores the 0xFE bytes the patch section lists, so a
+     * patch inside a name replaced by its default would stamp a peer
+     * character back into it: those entries become no-ops (0x00).
      */
-    applyDefaultNicknames(partyBytes) {
-        if (!this.defaultReceivedNames || !DefaultNames.loaded || !partyBytes) return partyBytes;
-        const L = this.NAME_LAYOUT;
-        // the peer's trainer name is shown in the trade/battle screens, so it
-        // gets this game's default trainer name ("TRAINER")
-        partyBytes.set(DefaultNames.getDefaultTrainerNameField(this.isJapanese), L.trainerNamePos);
-        const partySize = Math.min(Math.max(partyBytes[L.partySizePos] || 0, 0), 6);
-        const otField = DefaultNames.getDefaultTrainerNameField(this.isJapanese);
-        for (let slot = 0; slot < partySize; slot++) {
-            partyBytes.set(this.defaultNameFieldForSlot(partyBytes, slot), L.nicknamePos + slot * L.nameLength);
-            partyBytes.set(otField, L.otPos + slot * L.nameLength);
-        }
-        return partyBytes;
-    }
-
-    isNicknamePos(pos) {
-        const L = this.NAME_LAYOUT;
-        if (pos >= L.trainerNamePos && pos < L.trainerNamePos + L.nameLength) return true;
-        if (pos >= L.otPos && pos < L.otPos + 6 * L.nameLength) return true;
-        return pos >= L.nicknamePos && pos < L.nicknamePos + 6 * L.nameLength;
-    }
-
     neutralizeNicknamePatches(patchBytes) {
-        if (!this.defaultReceivedNames || !patchBytes) return patchBytes;
+        if (!this.replacesNames || !patchBytes) return patchBytes;
         const U = this.nameUtilsClass;
         const [num, idx] = U.getPatchSetNumIndex(false, false);
         let base = U.patch_set_base_pos[idx];
@@ -244,36 +277,49 @@ export class GSCTrading extends TradingProtocol {
             if (entry === 0xFF) {
                 remaining--;
                 base += 0xFC;
-            } else if (entry > 0 && this.isNicknamePos(entry + base - 1)) {
+            } else if (entry > 0 && this.isDefaultedNamePos(entry + base - 1)) {
                 patchBytes[i] = 0x00;
             }
         }
         return patchBytes;
     }
 
-    /**
-     * Sync-mode counterpart: substitute a peer party byte as it is fed to the
-     * device (nickname positions only).
-     */
+    // Sync-mode counterpart of neutralizeNicknamePatches, per fed byte
     peerFeedByte(index, pos, byte, otherBuf) {
-        if (!this.defaultReceivedNames || !DefaultNames.loaded) return byte;
-        if (index === 2) return this.peerPatchFeedByte(pos, byte, otherBuf);
-        if (index !== 1) return byte;
-        const L = this.NAME_LAYOUT;
-        if (pos >= L.trainerNamePos && pos < L.trainerNamePos + L.nameLength) {
-            const sub = DefaultNames.getDefaultTrainerNameField(this.isJapanese)[pos - L.trainerNamePos];
-            return sub === this.NO_INPUT ? 0xFF : sub;
+        if (index === 1) return this.jpTerminatedByte(pos, byte, otherBuf);
+        if (index !== 2 || !this.replacesNames) return byte;
+        return this.peerPatchFeedByte(pos, byte, otherBuf);
+    }
+
+    /**
+     * Python *TradingJP.fillers: a Japanese name is 5 characters + terminator,
+     * so INT positions 5-9 of each name are skipped and its 6th byte is INT
+     * position 10; the +2 entries catch a checker that emitted 2 bytes across
+     * position 5. firstNameEnd is the first OT name's start + 5.
+     */
+    static jpNameFillers(firstNameEnd) {
+        const fillers = { 5: [5, 0x50], 7: [3, 0x50] }; // trainer name
+        for (let i = 0; i < 12; i++) { // 6 OT names + 6 nicknames
+            fillers[firstNameEnd + i * 0x0B] = [5, 0x50];
+            fillers[firstNameEnd + 2 + i * 0x0B] = [3, 0x50];
         }
-        if (pos >= L.otPos && pos < L.otPos + 6 * L.nameLength) {
-            const sub = DefaultNames.getDefaultTrainerNameField(this.isJapanese)[(pos - L.otPos) % L.nameLength];
-            return sub === this.NO_INPUT ? 0xFF : sub;
-        }
-        if (pos < L.nicknamePos) return byte;
-        const slot = Math.floor((pos - L.nicknamePos) / L.nameLength);
-        if (slot >= 6 || slot >= Math.min(otherBuf[L.partySizePos] || 0, 6)) return byte;
-        const sub = this.defaultNameFieldForSlot(otherBuf, slot)[(pos - L.nicknamePos) % L.nameLength];
-        // 0xFE is the NO_INPUT control code and never legal device-bound data
-        return sub === this.NO_INPUT ? 0xFF : sub;
+        return fillers;
+    }
+
+    // INT position of each name's 6th Japanese byte -> start of that name
+    static jpNameSixthBytes(firstNameEnd) {
+        const starts = [0];
+        for (let i = 0; i < 12; i++) starts.push(firstNameEnd - 5 + i * 0x0B);
+        return new Map(starts.map((start) => [start + 10, start]));
+    }
+
+    // With no terminator in a name's first 5 bytes, its 6th Japanese byte must be one:
+    // INT position 10 can be a leftover byte after an earlier terminator
+    jpTerminatedByte(pos, byte, data) {
+        const start = this.jpNameSixthBytes?.get(pos);
+        if (start === undefined) return byte;
+        for (let j = start; j < start + 5; j++) if (data[j] === 0x50) return byte;
+        return 0x50;
     }
 
     /**
@@ -292,7 +338,7 @@ export class GSCTrading extends TradingProtocol {
         }
         if (separators >= num) return byte;
         base += separators * 0xFC;
-        return this.isNicknamePos(byte + base - 1) ? 0x00 : byte;
+        return this.isDefaultedNamePos(byte + base - 1) ? 0x00 : byte;
     }
 
     /**
@@ -392,8 +438,7 @@ export class GSCTrading extends TradingProtocol {
             // The server starts proxying messages immediately once both are in the room
         }
 
-        await this.enterRoom();
-        this.log("Entered Room. Sitting to table...");
+        if (await this.enterRoom()) this.log("Entered Room. Sitting to table...");
 
         await this.sitToTable();
         this.log("Sat at table. Starting Trade Sequence...");
@@ -449,6 +494,7 @@ export class GSCTrading extends TradingProtocol {
     }
 
     async tradeStartingSequence() {
+        this.checks?.resetSpeciesItemList?.();
         // For link trade: Wait for peer and negotiate buffered mode here (after GB sat at table)
         // ref impl runs this in background threads while GB enters room, but we do it lazily here
         // 0. Peer Negotiation is now done in startTrade() before entering the room
@@ -468,16 +514,12 @@ export class GSCTrading extends TradingProtocol {
         // Start with OLD protocol (compat_3_mode = true in ref impl)
         this.useNewProtocol = false;
 
-        // Version was sent at startTrade (4.1 behavior). Fetch the server
-        // version, then poll for the peer's: Python 4.1 waits up to 10s with
-        // GET recovery; a 3.x peer never answers and we fall back to OLD.
-        this.ws.sendGetData(this.MSG_VES);
-        const serverVersion = await this.waitForMessage(this.MSG_VES);
-        if (this.verbose) this.log(`Server Version: ${serverVersion}`);
+        // A 3.x peer never sends its version and we fall back to OLD
+        const peerVersion = await this.doVersionCheck();
+        if (this.verbose) this.log(`Server Version: ${this.serverVersion}`);
 
         if (this.isLinkTrade) {
-            const peerVersion = await this.waitForMessage(this.MSG_VEC, 10000);
-            if (peerVersion && peerVersion.length > 0) {
+            if (peerVersion) {
                 this.useNewProtocol = true;
                 this.log("Peer supports NEW protocol (32-byte SNG2)");
             } else {
@@ -524,12 +566,6 @@ export class GSCTrading extends TradingProtocol {
                         this.bufferedOtherData = this.unpackFLL2(earlyPeerData);
                         this.cachedPeerPartyDecoded = false; // FLL data is raw wire form
 
-                        // Fix incompatible nicknames for cross-version JP/INT trades
-                        const fixedCount = GSCUtils.fixIncompatibleNicknames(this.bufferedOtherData[1]);
-                        if (fixedCount > 0) {
-                            this.log(`[JP/INT] Fixed ${fixedCount} incompatible nickname(s)`);
-                        }
-
                         tradeData = {
                             section1: this.bufferedOtherData[1],
                             section2: this.bufferedOtherData[2],
@@ -559,42 +595,12 @@ export class GSCTrading extends TradingProtocol {
         } else {
             // Pool trade: Get Pokemon from pool
             if (this.verbose) this.log("Getting Pool Data...");
-            this.ws.sendGetData("POL2");
-            const poolData = await this.waitForMessage("POL2");
-
-            // Python kills the trade on the pool-failure reply
-            // ([counter, fail_value], length 2) instead of fabricating a mon.
-            if (!poolData || poolData.length <= 2) {
+            tradeData = await this.getPoolTradingData();
+            if (!tradeData) {
                 this.log("[ERROR] Pool unavailable (empty pool or server failure). Aborting trade.");
                 this.stopTrade = true;
                 return;
             }
-            if (this.verbose) this.log(`Pool Data received: ${poolData.length} bytes`);
-
-            // === POOL TRADING: EGG CONVERSION ===
-
-            //     mon.party_info.set_id(0, self.utils_class.egg_id)
-            //     received_mon[0].set_hatching_cycles()
-            //     received_mon[0].faint()
-            //     received_mon[0].set_egg_nickname()
-            let poolDataToUse = poolData.slice(1);
-
-            if (this.convertToEggs) {
-                this.log("[POOL] Convert to Eggs enabled - converting pool Pokemon to egg...");
-                poolDataToUse = this.convertPoolPokemonToEgg(poolDataToUse);
-            }
-
-            // Construct Trading Data from pool
-            tradeData = GSCUtils.createTradingData(poolDataToUse);
-
-            // Set trader name to "POOL" for pool trades
-            const poolName = GSCUtils.textToBytes("POOL");
-            for (let i = 0; i < poolName.length; i++) {
-                tradeData.section1[GSCUtils.trader_name_pos + i] = poolName[i];
-            }
-
-            // Cap Pokemon level to maxLevel setting (matches Python reference)
-            this.capPoolPokemonLevel(tradeData.section1, GSCUtils);
         }
 
         // 4. Execute Sections - Exchange data with GB
@@ -638,23 +644,23 @@ export class GSCTrading extends TradingProtocol {
         // Section 3: Mail - skip sync when buffered mode or no mail
         if (this.verbose) this.log(`[DEBUG] About to read Section 3 (Mail). skipMailSync=${skipMailSync}, isBuffered=${this.isBuffered}`);
 
-        // === JAPANESE MAIL CONVERSION (BEFORE sending to device) ===
-
-        let mailDataToSend = tradeData.section3;
-        if (this.isJapanese) {
-            this.log("[JP] Converting mail data before sending to Game Boy...");
-            mailDataToSend = await this.convertMailData(tradeData.section3, true);
+        // Mail is held in the new layout; the device and pre-4.2.0 peers
+        // get the layout of this read, converted for the game's language
+        const mailBufferedRead = this.isBuffered || skipMailSync;
+        this.updateMailTransferLayout(mailBufferedRead);
+        let mailDataToSend = GSCTrading.updateMailData(tradeData.section3, true);
+        if (this.getMailSectionId() === GSCTrading.BASE_MAIL_INDEX && !this.usesNewMailLayout(mailBufferedRead)) {
+            mailDataToSend = GSCTrading.updateMailData(mailDataToSend, false);
         }
+        mailDataToSend = await this.convertMailData(mailDataToSend, true);
 
         const gbMailData = await this.readSection(this.getMailSectionId(), mailDataToSend, skipMailSync);
         if (this.verbose) this.log(`[DEBUG] Section 3 (Mail) read complete. Got ${gbMailData?.length || 0} bytes`);
 
-        // === JAPANESE MAIL CONVERSION (AFTER receiving from device) ===
-
-        let processedMailData = gbMailData;
-        if (this.isJapanese && gbMailData) {
-            this.log("[JP] Converting mail data received from Game Boy...");
-            processedMailData = await this.convertMailData(gbMailData, false);
+        let processedMailData = GSCTrading.updateMailData(await this.convertMailData(gbMailData, false), true);
+        this.ownMailData = processedMailData;
+        if (!mailBufferedRead && this.peerMailData) {
+            this.peerMailData = GSCTrading.updateMailData(await this.convertMailData(this.peerMailData, false), true);
         }
 
         // === CACHE PEER SECTIONS FOR SUBSEQUENT TRADES ===
@@ -693,6 +699,16 @@ export class GSCTrading extends TradingProtocol {
                 section2: gbPatchData,
                 section3: processedMailData
             };
+            // Python buffered_trade: names a game of the peer's language can't show
+            // (Korean 2-byte text for others) are re-encoded before they are sent
+            if (this.otherLanguage !== null && this.otherLanguage !== undefined) {
+                const own = new GSCTradingData(Array.from(this.gbPartyData), GSCTrading.decodedMail(processedMailData), true, true);
+                own.patchOutBadCharsForLanguageBufferedOnly(this.language, this.otherLanguage);
+                const patched = own.createTradingData(GSCTradingData.SECTION_LENGTHS, true);
+                ourTradeData.section1 = new Uint8Array(patched[1]);
+                ourTradeData.section2 = new Uint8Array(patched[2]);
+                ourTradeData.section3 = new Uint8Array(patched[3]);
+            }
             await this.sendBigTradingData(randomData, ourTradeData);
 
             if (isGhostTrade) {
@@ -739,7 +755,15 @@ export class GSCTrading extends TradingProtocol {
                 // In sync mode, reset peerCounterId to null
                 // The BUF2 counters are NOT used for MVS2/CHC2 exchange in sync mode.
                 // The trade menu will re-initialize from the first message received.
-                this.peerCounterId = null;
+                // Not after a completed trade (full exchange because both players'
+                // input was required): the counters carry on, and the peer's last
+                // menu messages are stale (Python get_with_counter)
+                if (this.keepPeerCounter) {
+                    for (const tag of ["CHC2", "ACP2", "SUC2", this.MSG_ASK, this.MSG_MVS]) delete this.ws.recvDict[tag];
+                } else {
+                    this.peerCounterId = null;
+                }
+                this.keepPeerCounter = false;
                 if (this.verbose) this.log("[DEBUG] Reset peerCounterId to null for sync mode trade menu");
             }
 
@@ -763,194 +787,75 @@ export class GSCTrading extends TradingProtocol {
      * - Sender: 14 bytes (0x0E) - zeros if no mail
      */
     extractSinglePokemon(choiceByte) {
-        const SINGLE_POKEMON_DATA_LEN = 0x75; // 117 bytes - what server expects
-        const MAIL_LEN = 0x21;   // 33 bytes
-        const SENDER_LEN = 0x0E; // 14 bytes
-
-        if (!this.gbPartyData) {
-            this.log("[WARN] No GB party data available for extraction");
-            return new Uint8Array([choiceByte]); // Just return choice byte if no data
-        }
-
-        // Convert choice byte (0x70-0x75) to index (0-5)
         const index = choiceByte - 0x70;
-        if (index < 0 || index > 5) {
-            this.log(`[WARN] Invalid Pokemon index: ${index}`);
+        if (!this.gbPartyData || index < 0 || index > 5) {
+            this.log(`[WARN] No party data to offer slot ${index}`);
             return new Uint8Array([choiceByte]);
         }
-
-        // Create result array: choice (1) + Pokemon data (117 bytes) + egg flag (1)
-        const result = new Uint8Array(1 + SINGLE_POKEMON_DATA_LEN + 1);
-        result[0] = choiceByte;
-
-        let offset = 1; // Start after choice byte
-
-        // 1. Core Pokemon data (48 bytes per Pokemon)
-        const coreStart = this.TRADING_POKEMON_POS + (index * this.TRADING_POKEMON_LENGTH);
-        const coreData = this.gbPartyData.slice(coreStart, coreStart + this.TRADING_POKEMON_LENGTH);
-        result.set(coreData, offset);
-        offset += this.TRADING_POKEMON_LENGTH; // +48
-
-        // 2. OT name (11 bytes per name)
-        const otStart = this.TRADING_POKEMON_OT_POS + (index * this.TRADING_NAME_LENGTH);
-        const otData = this.gbPartyData.slice(otStart, otStart + this.TRADING_NAME_LENGTH);
-        result.set(otData, offset);
-        offset += this.TRADING_NAME_LENGTH; // +11
-
-        // 3. Nickname (11 bytes per name)
-        const nickStart = this.TRADING_POKEMON_NICKNAME_POS + (index * this.TRADING_NAME_LENGTH);
-        const nickData = this.gbPartyData.slice(nickStart, nickStart + this.TRADING_NAME_LENGTH);
-        result.set(nickData, offset);
-        offset += this.TRADING_NAME_LENGTH; // +11
-
-        // 4. Mail (33 bytes) - zeros for no mail
-        // Note: Mail data is in Section 3 if present, but we don't have it, so send zeros
-        offset += MAIL_LEN; // Already zeros from Uint8Array initialization
-
-        // 5. Sender (14 bytes) - zeros for no mail
-        offset += SENDER_LEN; // Already zeros
-
-        // 6. Egg flag (1 byte): egg slots are marked with EGG_ID in the
-        // party's species list
-        const isEgg = this.gbPartyData[this.TRADING_PARTY_INFO_POS + 1 + index] === GSCUtils.EGG_ID;
-        result[offset] = isEgg ? GSCUtils.EGG_VALUE : 0;
-
-        this.log(`Extracted Pokemon data for index ${index}: ${result.length} bytes (1 choice + ${SINGLE_POKEMON_DATA_LEN} data + 1 egg${isEgg ? ', EGG' : ''})`);
-        return result;
+        // Python generate_chosen_mon_data: the decoded mon with its mail and
+        // egg flag, in the peer's mail layout
+        let mail = null;
+        if (this.ownMailData) {
+            mail = Array.from(this.ownMailData);
+            GSCUtils.applyPatches(mail, mail, true, false, false);
+        }
+        const party = new GSCTradingData(Array.from(this.gbPartyData), mail, true, true);
+        if (index >= party.getPartySize()) return new Uint8Array([choiceByte]);
+        const mon = GSCUtils.singleMonToData(party.pokemon[index], party.isMonEgg(index), this.isGen2NewMail);
+        this.log(`Extracted Pokemon data for index ${index}: ${mon.length} bytes${party.isMonEgg(index) ? ', EGG' : ''}`);
+        return new Uint8Array([choiceByte, ...mon]);
     }
     /**
-     * Update bufferedOtherData (peer's party) after a trade.
-     * Mimics reorder_party + trade_mon behavior:
-     * 1. reorder_party: Move traded slot to END of party (shift others up)
-     * 2. Replace at LAST position with incoming Pokemon
-     * 
-     * @param {number} ourChoice - Our choice byte (0x70-0x75)
-     * @param {number} peerChoice - Peer's choice byte (0x70-0x75)
+     * Python trade_mon on the cached peer party: our (checked) mon and its
+     * mail replace the traded one at the end of the party, with the traded
+     * friendship, so the next sit can reuse the cache.
      */
+    // Mail in the 0x41-byte layout with its in-place patches applied, as the data model reads it
+    static decodedMail(mail) {
+        if (!mail) return null;
+        const out = Array.from(GSCTrading.updateMailData(mail, true));
+        GSCUtils.applyPatches(out, out, true, false, false);
+        return out;
+    }
+
     updatePeerPartyAfterTrade(ourChoice, peerChoice) {
-        if (!this.bufferedOtherData || !this.bufferedOtherData[1]) {
-            this.log("[WARN] No buffered peer data to update");
+        if (!this.bufferedOtherData?.[1] || !this.gbPartyData) {
+            this.log("[WARN] No party data to update after the trade");
             return;
         }
-
-        if (!this.gbPartyData) {
-            this.log("[WARN] No GB party data to extract from");
-            return;
-        }
-
         const ourIndex = ourChoice - 0x70;
         const peerIndex = peerChoice - 0x70;
-
         if (ourIndex < 0 || ourIndex > 5 || peerIndex < 0 || peerIndex > 5) {
             this.log(`[WARN] Invalid trade indices: our=${ourIndex}, peer=${peerIndex}`);
             return;
         }
-
-        this.log(`Updating peer party: our slot ${ourIndex} -> peer slot ${peerIndex} (will reorder to end)`);
-
-        // Copy of peer's party section (section 1)
-        const peerParty = new Uint8Array(this.bufferedOtherData[1]);
-
-        // Party data structure offsets (from ref impl gsc_trading_data_utils.py):
-        const TRADING_PARTY_INFO_POS = 0x0B;  // Party count
-        const SPECIES_LIST_POS = 0x0C;  // Species IDs (party_info_pos + 1)
-
-        // Get peer's party size
-        const partySize = peerParty[TRADING_PARTY_INFO_POS];
-        const lastIndex = partySize - 1;
-
-        this.log(`Peer party size: ${partySize}, last index: ${lastIndex}`);
-
-        // === Step 1: Reorder peer's party ===
-        // Move traded slot to END, shift others up
-        if (peerIndex < lastIndex) {
-            // Save the traded slot data
-            const tradedSpecies = peerParty[SPECIES_LIST_POS + peerIndex];
-            const tradedCoreData = new Uint8Array(this.TRADING_POKEMON_LENGTH);
-            const tradedOtName = new Uint8Array(this.TRADING_NAME_LENGTH);
-            const tradedNickname = new Uint8Array(this.TRADING_NAME_LENGTH);
-
-            // Copy traded slot data
-            for (let i = 0; i < this.TRADING_POKEMON_LENGTH; i++) {
-                tradedCoreData[i] = peerParty[this.TRADING_POKEMON_POS + (peerIndex * this.TRADING_POKEMON_LENGTH) + i];
-            }
-            for (let i = 0; i < this.TRADING_NAME_LENGTH; i++) {
-                tradedOtName[i] = peerParty[this.TRADING_POKEMON_OT_POS + (peerIndex * this.TRADING_NAME_LENGTH) + i];
-                tradedNickname[i] = peerParty[this.TRADING_POKEMON_NICKNAME_POS + (peerIndex * this.TRADING_NAME_LENGTH) + i];
-            }
-
-            // Shift all slots after peerIndex up by one
-            for (let i = peerIndex + 1; i < partySize; i++) {
-                // Shift species list
-                peerParty[SPECIES_LIST_POS + (i - 1)] = peerParty[SPECIES_LIST_POS + i];
-
-                // Shift core data
-                for (let j = 0; j < this.TRADING_POKEMON_LENGTH; j++) {
-                    peerParty[this.TRADING_POKEMON_POS + ((i - 1) * this.TRADING_POKEMON_LENGTH) + j] =
-                        peerParty[this.TRADING_POKEMON_POS + (i * this.TRADING_POKEMON_LENGTH) + j];
-                }
-
-                // Shift OT name
-                for (let j = 0; j < this.TRADING_NAME_LENGTH; j++) {
-                    peerParty[this.TRADING_POKEMON_OT_POS + ((i - 1) * this.TRADING_NAME_LENGTH) + j] =
-                        peerParty[this.TRADING_POKEMON_OT_POS + (i * this.TRADING_NAME_LENGTH) + j];
-                }
-
-                // Shift nickname
-                for (let j = 0; j < this.TRADING_NAME_LENGTH; j++) {
-                    peerParty[this.TRADING_POKEMON_NICKNAME_POS + ((i - 1) * this.TRADING_NAME_LENGTH) + j] =
-                        peerParty[this.TRADING_POKEMON_NICKNAME_POS + (i * this.TRADING_NAME_LENGTH) + j];
-                }
-            }
-
-            // Put traded slot data at the END (will be replaced with incoming Pokemon)
-            peerParty[SPECIES_LIST_POS + lastIndex] = tradedSpecies;
-            for (let i = 0; i < this.TRADING_POKEMON_LENGTH; i++) {
-                peerParty[this.TRADING_POKEMON_POS + (lastIndex * this.TRADING_POKEMON_LENGTH) + i] = tradedCoreData[i];
-            }
-            for (let i = 0; i < this.TRADING_NAME_LENGTH; i++) {
-                peerParty[this.TRADING_POKEMON_OT_POS + (lastIndex * this.TRADING_NAME_LENGTH) + i] = tradedOtName[i];
-                peerParty[this.TRADING_POKEMON_NICKNAME_POS + (lastIndex * this.TRADING_NAME_LENGTH) + i] = tradedNickname[i];
-            }
-
-            this.log(`Reordered peer party: moved slot ${peerIndex} to end (slot ${lastIndex})`);
+        const decodedMail = GSCTrading.decodedMail;
+        const peerParty = Array.from(this.bufferedOtherData[1]);
+        if (!this.cachedPeerPartyDecoded && this.bufferedOtherData[2]) {
+            GSCUtils.applyPatches(peerParty, this.bufferedOtherData[2], false);
         }
-
-        // === Step 2: Place our Pokemon at lastIndex (like trade_mon) ===
-        const ourSpecies = this.gbPartyData[this.TRADING_POKEMON_POS + (ourIndex * this.TRADING_POKEMON_LENGTH)];
-        const oldPeerSpecies = peerParty[SPECIES_LIST_POS + lastIndex];
-
-        // Update species list at lastIndex
-        peerParty[SPECIES_LIST_POS + lastIndex] = ourSpecies;
-        this.log(`Updated species at slot ${lastIndex}: ${oldPeerSpecies} -> ${ourSpecies}`);
-
-        // Copy our core Pokemon data to lastIndex
-        const ourCoreStart = this.TRADING_POKEMON_POS + (ourIndex * this.TRADING_POKEMON_LENGTH);
-        const peerCoreStart = this.TRADING_POKEMON_POS + (lastIndex * this.TRADING_POKEMON_LENGTH);
-        for (let i = 0; i < this.TRADING_POKEMON_LENGTH; i++) {
-            peerParty[peerCoreStart + i] = this.gbPartyData[ourCoreStart + i];
+        const own = new GSCTradingData(Array.from(this.gbPartyData), decodedMail(this.ownMailData), true, true);
+        const peer = new GSCTradingData(peerParty, decodedMail(this.bufferedOtherData[3]), true, true);
+        if (ourIndex >= own.getPartySize() || peerIndex >= peer.getPartySize()) {
+            this.log(`[WARN] Trade indices outside the parties: our=${ourIndex}, peer=${peerIndex}`);
+            return;
         }
-
-        // Copy our OT name to lastIndex
-        const ourOtStart = this.TRADING_POKEMON_OT_POS + (ourIndex * this.TRADING_NAME_LENGTH);
-        const peerOtStart = this.TRADING_POKEMON_OT_POS + (lastIndex * this.TRADING_NAME_LENGTH);
-        for (let i = 0; i < this.TRADING_NAME_LENGTH; i++) {
-            peerParty[peerOtStart + i] = this.gbPartyData[ourOtStart + i];
-        }
-
-        // Copy our Nickname to lastIndex
-        const ourNickStart = this.TRADING_POKEMON_NICKNAME_POS + (ourIndex * this.TRADING_NAME_LENGTH);
-        const peerNickStart = this.TRADING_POKEMON_NICKNAME_POS + (lastIndex * this.TRADING_NAME_LENGTH);
-        for (let i = 0; i < this.TRADING_NAME_LENGTH; i++) {
-            peerParty[peerNickStart + i] = this.gbPartyData[ourNickStart + i];
-        }
-
-        // Update the buffered data with modified party
-        this.bufferedOtherData[1] = peerParty;
-
-        // Debug: show new species list
-        const speciesList = Array.from(peerParty.slice(SPECIES_LIST_POS, SPECIES_LIST_POS + partySize));
-        this.log(`Peer party updated. New species list: ${speciesList.map(s => s.toString(16)).join(', ')}`);
+        own.tradeMon(peer, ourIndex, peerIndex, this.checks);
+        // Python own/other_pokemon.requires_input(last): evolves the received mons
+        // (species, item consumed, default nickname, stats, auto-learned moves)
+        const ownRequiresInput = !!own.requiresInput(own.getLastMonIndex(), this.SPECIAL_MONS, this.language, this.language);
+        const peerRequiresInput = !!peer.requiresInput(peer.getLastMonIndex(), this.SPECIAL_MONS,
+            this.otherLanguage, this.language);
+        const sections = peer.createTradingData(this.SPECIAL_SECTIONS_LEN, true);
+        const party = Array.from(sections[1]);
+        GSCUtils.applyPatches(party, sections[2], false);
+        this.bufferedOtherData[1] = new Uint8Array(party);
+        this.bufferedOtherData[2] = new Uint8Array(sections[2]);
+        this.bufferedOtherData[3] = new Uint8Array(sections[3]);
+        this.cachedPeerPartyDecoded = true;
+        const species = peer.pokemon.map((mon) => mon.getSpecies().toString(16));
+        this.log(`Peer party updated. New species list: ${species.join(', ')}`);
+        return { ownRequiresInput, peerRequiresInput };
     }
 
     /**
@@ -1421,34 +1326,25 @@ export class GSCTrading extends TradingProtocol {
 
     /**
      * Force close an open trade menu by sending STOP_TRADE until confirmed.
-     * Sends 0x7F until GB responds 0x7F, then waits for 0.
+     * Sends 0x7F until GB responds 0x7F, then until it answers 0. No time
+     * limit, like Python's end_trade: a game that was offering a Pokemon takes
+     * seconds to answer. Stop and transport errors end it.
      */
     async endTrade(stopTradeValue) {
+        const begin = Date.now();
         let next = 0;
         let target = stopTradeValue;
-        let iterations = 0;
-        const maxIterations = 100; // Safety limit
 
-        // Phase 1: Send 0x7F until GB responds with 0x7F
-        while (next !== target && iterations < maxIterations && !this.stopTrade) {
+        while (next !== target && !this.stopTrade) {
             next = await this.exchangeByte(stopTradeValue);
             if (target === stopTradeValue && next === target) {
                 // GB confirmed STOP_TRADE, now wait for 0
                 target = 0;
             }
-            iterations++;
             await this.sleep(5);
         }
 
-        // Phase 2: Send 0x7F until we get 0 (or timeout)
-        iterations = 0;
-        while (next !== 0 && iterations < maxIterations && !this.stopTrade) {
-            next = await this.exchangeByte(stopTradeValue);
-            iterations++;
-            await this.sleep(5);
-        }
-
-        this.log(`endTrade completed after ${iterations} iterations, final: 0x${next.toString(16)}`);
+        this.log(`endTrade completed in ${Date.now() - begin} ms, final: 0x${next.toString(16)}`);
     }
 
     // ==================== LINK TRADE HELPER METHODS ====================
@@ -1468,23 +1364,118 @@ export class GSCTrading extends TradingProtocol {
         return this.isJapanese ? 4 : 3;
     }
 
-    getSectionLength(index) {
+    static BASE_MAIL_INDEX = 3;
+    static MAIL_STARTER = 0x20;
+    static MAIL_STARTER_KOREAN = 0x52;
+    static MAIL_MESSAGE_SIZE_INT = 0x21;
+    static MAIL_MESSAGE_SIZE_KOR = 0x41;
+    static MAIL_SECTION_LEN_OLD = 0x181;
+    static MAIL_SECTION_LEN_NEW = 0x241;
+
+    // International games store 0x21 bytes of each 0x41-byte message slot
+    static intMailFillers() {
+        const fillers = {};
+        for (let i = 0; i < 6; i++) {
+            fillers[GSCTrading.MAIL_MESSAGE_SIZE_INT + i * GSCTrading.MAIL_MESSAGE_SIZE_KOR] =
+                [GSCTrading.MAIL_MESSAGE_SIZE_KOR - GSCTrading.MAIL_MESSAGE_SIZE_INT, 0x50];
+        }
+        return fillers;
+    }
+
+    // Korean games carry a shorter mail patch set
+    static korMailFillers() {
+        return { 0x22E: [0x13, 0] };
+    }
+
+    // The new mail layout is used with 4.2.0+ peers and in every buffered read
+    usesNewMailLayout(buffered) {
+        return this.isGen2NewMail || buffered;
+    }
+
+    getSectionLength(index, buffered = this.isBuffered) {
         if (this.isJapanese && index === 4) {
-            return this.jpMailConverter?.mailConversionTableJp?.length ?? 0x11D;
+            return this.jpMailConverter?.mailChecker?.length ?? this.jpMailConverter?.mailConversionTableJp?.length ?? 0x11D;
+        }
+        if (index === this.getMailSectionId()) {
+            return this.usesNewMailLayout(buffered) ? GSCTrading.MAIL_SECTION_LEN_NEW : GSCTrading.MAIL_SECTION_LEN_OLD;
         }
         return this.SPECIAL_SECTIONS_LEN[index];
     }
 
+    /**
+     * Python get_checker: the sanity checks for a section; check functions
+     * may return zero or several bytes.
+     */
+    getSectionChecker(index, buffered = this.isBuffered) {
+        const length = this.getSectionLength(index, buffered);
+        let checker = null;
+        if (this.isJapanese && index === 4) {
+            checker = this.jpMailConverter?.mailChecker ?? null;
+        } else if (this.checks?.getChecker) {
+            const mapIndex = index === this.getMailSectionId() ? GSCTrading.BASE_MAIL_INDEX : index;
+            checker = this.checks.getChecker(mapIndex, this.usesNewMailLayout(buffered));
+        }
+        if (checker && checker.length >= length && typeof checker[0] === 'function') return checker;
+        return new Array(length).fill((value) => value);
+    }
+
+    prepareChecksForSection() {
+        if (this.checks?.resetTextBuffers) this.checks.resetTextBuffers();
+        else this.checks?.prepareTextBuffer?.();
+        this.checks?.preparePatchSetsBuffer?.();
+        this.checks?.prepareSpeciesBuffer?.();
+    }
+
+    // Python prevent_no_input_to_list: NO_INPUT never reaches the device
+    preventNoInputList(value) {
+        const values = Array.isArray(value) ? value : [value];
+        return values.map((v) => (v === this.NO_INPUT ? 0xFF : v));
+    }
+
+    /**
+     * Python update_mail_data_transfer_based_on_language_and_version: which
+     * bytes of the mail section the device actually exchanges.
+     */
+    updateMailTransferLayout(buffered) {
+        if (this.isJapanese) return;
+        this.SECTION_FILLERS[this.getMailSectionId()] = this.usesNewMailLayout(buffered) ? GSCTrading.intMailFillers() : {};
+    }
+
+    /**
+     * Python update_mail_data: convert a mail section between the 0x21-byte
+     * message layout (pre-4.2.0 peers) and the 0x41-byte one. The patch set
+     * stays at the end of the message data, so it carries over as is.
+     */
+    static updateMailData(data, upgrade) {
+        if (!data) return data;
+        const intSize = GSCTrading.MAIL_MESSAGE_SIZE_INT;
+        const korSize = GSCTrading.MAIL_MESSAGE_SIZE_KOR;
+        if (upgrade) {
+            if (data.length !== GSCTrading.MAIL_SECTION_LEN_OLD) return data;
+            const out = [];
+            for (let i = 0; i < 6; i++) {
+                out.push(...data.slice(i * intSize, (i + 1) * intSize));
+                out.push(...new Array(korSize - intSize).fill(0x50));
+            }
+            out.push(...data.slice(6 * intSize));
+            return new Uint8Array(out);
+        }
+        if (data.length !== GSCTrading.MAIL_SECTION_LEN_NEW) return data;
+        const out = [];
+        for (let i = 0; i < 6; i++) out.push(...data.slice(i * korSize, i * korSize + intSize));
+        out.push(...data.slice(6 * korSize));
+        return new Uint8Array(out);
+    }
+
     getSectionStarter(index) {
-        if (this.isJapanese && index === 4) return 0x20;
-        return [0xFD, 0xFD, 0xFD, 0x20][index] ?? 0xFD;
+        if (index === this.getMailSectionId()) return GSCTrading.MAIL_STARTER;
+        return 0xFD;
     }
 
     // Python special_sections_sync: controls the stage-1 preamble byte
     // (NO_INPUT for synced sections, the starter itself for mail).
     isSectionStage1Synced(index) {
-        if (this.isJapanese && index === 4) return false;
-        return [true, true, true, false][index] ?? true;
+        return index < GSCTrading.BASE_MAIL_INDEX;
     }
 
     /**
@@ -1532,6 +1523,41 @@ export class GSCTrading extends TradingProtocol {
             await this.sleep(50);
         }
         return null;
+    }
+
+    // The cached peer party as Python's other_pokemon (decoded, with mail)
+    peerPartyModel() {
+        if (!this.bufferedOtherData?.[1]) return null;
+        const party = Array.from(this.bufferedOtherData[1]);
+        if (!this.cachedPeerPartyDecoded && this.bufferedOtherData[2]) {
+            GSCUtils.applyPatches(party, this.bufferedOtherData[2], false);
+        }
+        let mail = null;
+        if (this.bufferedOtherData[3]) {
+            mail = Array.from(GSCTrading.updateMailData(this.bufferedOtherData[3], true));
+            GSCUtils.applyPatches(mail, mail, true, false, false);
+        }
+        return new GSCTradingData(party, mail, true, true);
+    }
+
+    /**
+     * Python get_chosen_mon: the offered mon is looked up in the cached party
+     * (so a reordered party still trades the right one); with the sanity
+     * checks on, a mon that isn't there makes the trade invalid.
+     */
+    locateChosenMon(choice, monData) {
+        const peer = this.peerPartyModel();
+        if (!peer) return [choice, true];
+        let index = choice - 0x70;
+        if (this.checks.doSanityChecks && index >= peer.getPartySize()) index = peer.getLastMonIndex();
+        const mon = monData.length > 0 ? GSCUtils.singleMonFromData(this.checks, Array.from(monData)) : null;
+        let found = mon ? peer.searchForMon(mon[0], mon[1]) : null;
+        let valid = true;
+        if (found === null) {
+            found = index;
+            if (this.checks.doSanityChecks) valid = false;
+        }
+        return [0x70 + found, valid];
     }
 
     async getChosenMon() {
@@ -1591,17 +1617,10 @@ export class GSCTrading extends TradingProtocol {
                 }
 
                 // Extract Pokemon data if present
-                let pokemonData = data.slice(2);
-                let isValid = pokemonData.length > 0;
-
-                // Apply sanity checks to incoming Pokemon data
-                if (isValid && this.doSanityChecks && this.checks.loaded) {
-                    const cleanedData = this.checks.cleanSinglePokemon(pokemonData);
-                    pokemonData = new Uint8Array(cleanedData);
-                    this.log(`[CHECKS] Applied sanity checks to CHC2 Pokemon data`);
-                }
-
-                return [choice, pokemonData, isValid];
+                const pokemonData = data.slice(2);
+                const [foundChoice, isValid] = this.locateChosenMon(choice, pokemonData);
+                if (!isValid) this.log("The other player's Pokémon doesn't match their party. The trade will be declined.");
+                return [foundChoice, pokemonData, isValid];
             }
         }
         return null;
@@ -1731,6 +1750,8 @@ export class GSCTrading extends TradingProtocol {
             }
         }
 
+        // Python do_trade autoclose_on_stop: armed by a one-sided cancel
+        let autocloseOnStop = false;
         while (!this.stopTrade) {
             // 1. Wait for our GB's selection
             this.onStatus?.('Pick a Pokémon on your Game Boy');
@@ -1740,37 +1761,16 @@ export class GSCTrading extends TradingProtocol {
 
             this.log(`Our GB selected: 0x${ourChoice.toString(16)} (Index: ${ourChoice - FIRST_TRADE_INDEX})`);
 
-            // 2. Check for STOP_TRADE (cancel)
-            if (ourChoice === STOP_TRADE) {
-                this.log("Trade cancelled by us. Sending cancel to peer...");
-                // Send cancel to peer
-                const cancelPayload = new Uint8Array([this.ownCounterId, STOP_TRADE]);
-                this.ws.sendData("CHC2", cancelPayload);
-                this.ownCounterId = (this.ownCounterId + 1) % 256;
-
-                // === CRITICAL: Still receive peer's CHC2 to keep counters in sync ===
-                // ref impl always calls force_receive(get_mon_function) even during cancel.
-                // If we don't consume peer's response, its stale CHC2 remains in the buffer
-                // and will be incorrectly accepted on re-entry (counter will match!).
-                this.log("Waiting for peer's response to sync counters...");
-                const peerResponse = await this.getChosenMon();
-                if (peerResponse) {
-                    this.log(`Peer responded with: 0x${peerResponse[0].toString(16)} (consumed for counter sync)`);
-                    // peerCounterId was already incremented inside getPeerSelection()
-                } else {
-                    // Timeout - peer may have also cancelled, increment counter anyway
-                    this.log("[WARN] No peer response received, incrementing peerCounterId to stay in sync");
-                    if (this.peerCounterId !== null) {
-                        this.peerCounterId = (this.peerCounterId + 1) % 256;
-                    }
-                }
-
+            if (autocloseOnStop && ourChoice === STOP_TRADE) {
+                // CANCEL again after a one-sided cancel: close the menu locally (Python)
+                this.log("Cancelled again after a one-sided cancel - closing the trade menu");
                 await this.endTrade(STOP_TRADE);
                 break;
             }
 
+            // 2. STOP_TRADE (cancel) goes to the peer like a choice (Python send_chosen_mon)
             // 3. Send our choice + Pokemon data to server (proxied to peer)
-            const pokemonData = this.extractSinglePokemon(ourChoice);
+            const pokemonData = ourChoice === STOP_TRADE ? new Uint8Array([ourChoice]) : this.extractSinglePokemon(ourChoice);
             const chc2Payload = new Uint8Array(1 + pokemonData.length);
             if (this.verbose) this.log(`[DEBUG] Before CHC2: ownCounterId=${this.ownCounterId}`);
             chc2Payload[0] = this.ownCounterId;
@@ -1789,12 +1789,25 @@ export class GSCTrading extends TradingProtocol {
 
             const [peerChoice, peerPokemon, peerValid] = peerData;
 
-            // 5. Handle peer cancel
-            if (peerChoice === STOP_TRADE) {
-                this.log("Trade cancelled by peer.");
-                await this.endTrade(STOP_TRADE);
-                break;
+            // 5. Cancels (Python do_trade): both -> close the menu; one side ->
+            // hand the other player's choice to the game (the game that cancelled
+            // gets a Pokemon index and stays on CANCEL, the other one gets $7F and
+            // redraws the menu) and close at once on the next CANCEL
+            if (ourChoice === STOP_TRADE || peerChoice === STOP_TRADE) {
+                if (ourChoice === STOP_TRADE && peerChoice === STOP_TRADE) {
+                    this.log("Both players cancelled - closing the trade menu.");
+                    await this.endTrade(STOP_TRADE);
+                    break;
+                }
+                this.log(ourChoice === STOP_TRADE ? "We cancelled, the other player did not - back to the menu."
+                    : "Trade cancelled by peer - back to the menu.");
+                autocloseOnStop = true;
+                let n = await this.exchangeByte(peerChoice);
+                n = await this.waitForNoData(n, peerChoice, 20);
+                if (n === this.NO_DATA) n = await this.waitForNoInput(n);
+                continue;
             }
+            autocloseOnStop = false;
 
             // 6. Send peer's choice to our GB
             let next = await this.exchangeByte(peerChoice);
@@ -1805,7 +1818,8 @@ export class GSCTrading extends TradingProtocol {
 
             // 7. Wait for our GB's accept/decline
             this.onStatus?.('Confirm the trade on your Game Boy');
-            const ourAccept = await this.waitForAcceptDecline(next);
+            let ourAccept = await this.waitForAcceptDecline(next);
+            if (!peerValid) ourAccept = DECLINE_TRADE;
             this.log(`Our GB decision: ${ourAccept === ACCEPT_TRADE ? 'ACCEPT' : 'DECLINE'}`);
 
             // 8. Send our accept to peer
@@ -1816,11 +1830,12 @@ export class GSCTrading extends TradingProtocol {
 
             // 9. Get peer's accept/decline
             this.onStatus?.('Waiting for the other player to confirm…');
-            const peerAccept = await this.getAccepted();
+            let peerAccept = await this.getAccepted();
             if (peerAccept === null) {
                 this.log("Failed to get peer's accept decision");
                 continue;
             }
+            if (!peerValid) peerAccept = DECLINE_TRADE;
             this.log(`Peer decision: ${peerAccept === ACCEPT_TRADE ? 'ACCEPT' : 'DECLINE'}`);
 
             // 10. Send peer's accept to our GB
@@ -1860,8 +1875,12 @@ export class GSCTrading extends TradingProtocol {
                 const peerTradedItem = peerPokemon && peerPokemon.length > 1 ? peerPokemon[1] : 0;
                 const ourTradedItem = this.gbPartyData ?
                     this.gbPartyData[this.TRADING_POKEMON_POS + (ourIndex * this.TRADING_POKEMON_LENGTH) + 1] : 0;
-                const peerNeedsMVS2 = this.monRequiresInput(peerTradedSpecies, peerTradedItem); // mon WE received
-                const weNeedMVS2FromPeer = this.monRequiresInput(ourTradedSpecies, ourTradedItem); // mon PEER received
+                // Python do_trade: trade_mon on the parties, then requires_input on
+                // both received mons - which evolves them in the copies (the peer's
+                // cached party included) - gives the need_data values
+                const evo = this.updatePeerPartyAfterTrade(ourChoice, peerChoice);
+                const peerNeedsMVS2 = evo ? evo.ownRequiresInput : this.monRequiresInput(peerTradedSpecies, peerTradedItem); // mon WE received
+                const weNeedMVS2FromPeer = evo ? evo.peerRequiresInput : this.monRequiresInput(ourTradedSpecies, ourTradedItem); // mon PEER received
 
                 if (this.verbose) this.log(`[DEBUG] Traded species: we received=0x${peerTradedSpecies.toString(16)}, peer received=0x${ourTradedSpecies.toString(16)}`);
 
@@ -1887,6 +1906,18 @@ export class GSCTrading extends TradingProtocol {
 
                 // otherBlankTrade = whether peer needs to send us MVS2
                 this.otherBlankTrade = weNeedMVS2FromPeer;
+                // Python check_reset_trade: both sides need input -> the cached
+                // data is useless; the next sit does a full exchange with the peer
+                if (this.ownBlankTrade && this.otherBlankTrade) {
+                    this.bufferedOtherData = null;
+                    this.cachedPeerPartyDecoded = false;
+                    delete this.ws.sendDict[this.MSG_FLL];
+                    delete this.ws.recvDict[this.MSG_FLL];
+                    // ...but the message counters carry on (Python keeps other_id): the
+                    // peer's last CHC2 of this round must stay stale for the next menu
+                    this.keepPeerCounter = true;
+                    this.log("Both players' input is required - the next sit restarts the data exchange");
+                }
                 if (this.verbose) this.log(`[DEBUG] Blank trade flags set: ownBlankTrade=${this.ownBlankTrade}, otherBlankTrade=${this.otherBlankTrade}`);
 
                 // Wait for success confirmation from GB
@@ -1933,9 +1964,7 @@ export class GSCTrading extends TradingProtocol {
                 this.completedTradeCount++;
                 if (this.verbose) this.log(`[DEBUG] Real trades completed: ${this.completedTradeCount}`);
 
-                // Update peer's cached party data with our traded Pokemon
-                // This mimics trade_mon - no need for new FLL2 exchange
-                this.updatePeerPartyAfterTrade(ourChoice, peerChoice);
+                // (the cached peer party was updated before the need_data exchange)
 
                 // Clear gbPartyData so next trade reads fresh data from GB
                 // (GB has already updated its party internally)
@@ -2166,88 +2195,69 @@ export class GSCTrading extends TradingProtocol {
      * @param {boolean} toDevice - true when sending TO Game Boy, false when receiving FROM Game Boy
      * @returns {Uint8Array} - Converted mail data (or original if not Japanese)
      */
+    /**
+     * Python GSCTradingJP.convert_mail_data: the international side is the
+     * 0x41-byte layout; patches are decoded before converting and rebuilt
+     * for the other side.
+     */
     async convertMailData(data, toDevice) {
-        if (!this.isJapanese || !data || data.length === 0) {
+        if (!this.isJapanese || !this.jpMailConverter || !data || data.length === 0) {
             return data;
         }
-
-        // Ensure converter is loaded
-        if (!this.jpMailConverter.isLoaded()) {
-            await this.jpMailConverter.load();
-        }
-
-        // The in-place patch decode below must not mutate cached sections
-        data = new Uint8Array(data);
-
+        if (!this.jpMailConverter.isLoaded()) await this.jpMailConverter.load();
+        const work = Array.from(data);
         if (toDevice) {
-            // Sending TO Japanese Game Boy:
-            // 1. Apply International mail patches
-            // 2. Convert to Japanese format
-            // 3. Create Japanese mail patches
-            this.log('[JP] Converting mail: International → Japanese');
-            GSCUtils.applyPatches(data, data, true, false); // isMail=true, isJapanese=false
-            const jpData = this.jpMailConverter.convertToJp(data);
-            GSCUtils.createPatchesData(jpData, jpData, true, true); // isMail=true, isJapanese=true
-            return jpData;
-        } else {
-            // Receiving FROM Japanese Game Boy:
-            // 1. Apply Japanese mail patches
-            // 2. Convert to International format
-            // 3. Create International mail patches
-            this.log('[JP] Converting mail: Japanese → International');
-            GSCUtils.applyPatches(data, data, true, true); // isMail=true, isJapanese=true
-            const intData = this.jpMailConverter.convertToInt(data);
-            GSCUtils.createPatchesData(intData, intData, true, false); // isMail=true, isJapanese=false
-            return intData;
+            GSCUtils.applyPatches(work, work, true, false, false);
+            const jpData = this.jpMailConverter.convertToJp(work);
+            GSCUtils.createPatchesData(jpData, jpData, true, true, false);
+            return new Uint8Array(jpData);
         }
+        GSCUtils.applyPatches(work, work, true, true, false);
+        const intData = this.jpMailConverter.convertToInt(work);
+        GSCUtils.createPatchesData(intData, intData, true, false, false);
+        return new Uint8Array(intData);
     }
 
+    get MSG_PLN() { return "PLN2"; }
+
     /**
-     * Convert pool Pokemon data to an egg.
-     * Only used for pool trading when convertToEggs option is enabled.
-     * 
-     * ref impl equivalent in get_trading_data():
-     *   mon.party_info.set_id(0, self.utils_class.egg_id)
-     *   received_mon[0].set_hatching_cycles()
-     *   received_mon[0].faint()
-     *   received_mon[0].set_egg_nickname()
-     * 
-     * @param {Uint8Array} poolData - Single Pokemon data from pool (after slicing first byte)
-     * @returns {Uint8Array} - Modified data with egg properties
+     * Python get_pool_trading_data: the server's mon (checked in every
+     * language) goes into the pre-baked pool party, with the level cap and the
+     * egg options applied, then becomes the device sections.
      */
-    convertPoolPokemonToEgg(poolData) {
-        // Pool data layout (Python single_mon_to_data, no header byte):
-        // [0-47] core struct (species at 0, cycles at 0x1B, status at 0x20,
-        // HP at 0x22-0x23), [48-58] OT name, [59-69] nickname, then mail/sender
-        // and a trailing egg-flag byte (0x38 = egg). Egg-ness is signaled via
-        // that flag; the real species byte stays untouched.
-        const data = new Uint8Array(poolData);
-
-        // 1. Hatching cycles (Python set_hatching_cycles default = 1)
-        data[0x1B] = 1;
-
-        // 2. Faint the Pokemon (Python faint(): HP = 0, status = 0)
-        data[0x20] = 0;
-        data[0x22] = 0;
-        data[0x23] = 0;
-
-        // 3. Set nickname to "EGG" (offset 48 + 11 = 59, after OT name)
-        const NICKNAME_OFFSET = 0x30 + 0x0B;
-        // EGG in Game Boy encoding: E=0x84, G=0x86, G=0x86, terminated with 0x50
-        const EGG_NICKNAME = [0x84, 0x86, 0x86, 0x50, 0x50, 0x50, 0x50, 0x50, 0x50, 0x50, 0x50];
-        for (let i = 0; i < 11; i++) {
-            data[NICKNAME_OFFSET + i] = EGG_NICKNAME[i];
+    async getPoolTradingData() {
+        this.ws.sendGetData(this.MSG_PLN);
+        const poolData = await this.waitForMessage(this.MSG_PLN);
+        // [counter, fail_value] means the pool has nothing to offer
+        if (!poolData || poolData.length <= 2) return null;
+        const received = GSCUtils.singleMonFromDataMultilanguage(GSCUtils.getBasicChecks(), Array.from(poolData.slice(1)));
+        if (!received) return null;
+        const [mon, isEgg] = received;
+        const base = await GSCUtils.loadBinaryFile('base_pool.bin');
+        if (!base) return null;
+        const party = new GSCTradingData(Array.from(base), null, false);
+        party.pokemon.push(mon);
+        if (mon.getLevel() > this.maxLevel) mon.setLevel(this.maxLevel);
+        if (!isEgg) {
+            party.partyInfo.setId(0, mon.getSpecies());
+            if (this.convertToEggs) {
+                party.partyInfo.setId(0, GSCUtils.EGG_ID);
+                mon.setHatchingCycles();
+                mon.faint();
+                mon.setEggNickname(this.language);
+            }
+        } else if (!this.convertToEggs && mon.getHatchingCycles() <= 1) {
+            party.partyInfo.setId(0, mon.getSpecies());
+            mon.heal();
+            mon.setDefaultNickname(this.language);
         }
-
-        // 4. Trailing egg flag: createTradingData turns this into the party-list
-        // EGG_ID (0xFD)
-        const EGG_FLAG_OFFSET = 0x75; // 48 + 11 + 11 + 33 + 14
-        if (data.length > EGG_FLAG_OFFSET) {
-            data[EGG_FLAG_OFFSET] = GSCUtils.EGG_VALUE;
-        }
-        this.log(`[POOL-EGG] Converted pool Pokemon to egg (cycles=1, fainted, EGG nickname)`);
-
-        return data;
+        party.patchOutBadCharsForLanguageBufferedOnly(null, this.language);
+        const sections = party.createTradingData(this.SPECIAL_SECTIONS_LEN, true);
+        return {
+            section1: new Uint8Array(sections[1]),
+            section2: new Uint8Array(sections[2]),
+            section3: new Uint8Array(sections[3]),
+        };
     }
 
     /**
@@ -2259,21 +2269,6 @@ export class GSCTrading extends TradingProtocol {
      * @param {Uint8Array} section1 - The party data section
      * @param {Object} utilsClass - GSCUtils or RBYUtils for position constants
      */
-    capPoolPokemonLevel(section1, utilsClass) {
-        if (!this.maxLevel || this.maxLevel >= 100) return;
-
-        // Level is at trading_pokemon_pos + level_pos within section1
-        // GSC: level_pos = 0x1F, RBY: level_pos = 0x21
-        const levelOffset = utilsClass.trading_pokemon_pos + utilsClass.level_pos;
-
-        if (levelOffset < section1.length) {
-            const currentLevel = section1[levelOffset];
-            if (currentLevel > this.maxLevel) {
-                if (this.verbose) this.log(`[POOL] Capping Pokemon level from ${currentLevel} to ${this.maxLevel}`);
-                section1[levelOffset] = this.maxLevel;
-            }
-        }
-    }
 
     /**
      * Complete buffered mode negotiation after buffered message was already sent.
@@ -2301,6 +2296,13 @@ export class GSCTrading extends TradingProtocol {
 
         // Track last peer buffered counter to detect new messages
         this.lastPeerBufCounter = peerCounter;
+
+        // Python GSCBufferedNegotiator: a forced buffered request wins outright
+        if (peerMode === GSCTrading.FORCE_BUFFERED_VALUE) {
+            this.isBuffered = true;
+            this.log(`Forced a Buffered ${this.recapKind.endsWith('Battle') ? 'battle' : 'trade'}.`);
+            return;
+        }
 
         // Check if modes match
         if (ourBuffered === peerBuffered) {
@@ -2399,9 +2401,14 @@ export class GSCTrading extends TradingProtocol {
                         const newPeerCounter = updatedBuf[0];
                         if (newPeerCounter !== this.lastPeerBufCounter) {
                             this.lastPeerBufCounter = newPeerCounter;
-                            peerCurrentMode = (updatedBuf[1] === 0x85);
+                            peerCurrentMode = (updatedBuf[1] === 0x85 || updatedBuf[1] === GSCTrading.FORCE_BUFFERED_VALUE);
                             this.log(`Other player chose: ${peerCurrentMode ? 'Buffered' : 'Sync'} [Counter: ${newPeerCounter}]`);
                             gotResponse = true;
+                            if (updatedBuf[1] === GSCTrading.FORCE_BUFFERED_VALUE) {
+                                this.isBuffered = true;
+                                this.log('Forced a Buffered trade.');
+                                return;
+                            }
                         }
                     }
                 }
@@ -2420,14 +2427,88 @@ export class GSCTrading extends TradingProtocol {
     }
 
 
+    sendSessionIdentity() {
+        this.ws.sendData(this.MSG_VEC, this.versionData());
+        if (this.MSG_LNG) this.ws.sendData(this.MSG_LNG, new Uint8Array([this.language]));
+        const type = this.clientType;
+        this.ws.sendData(this.MSG_CLN, new Uint8Array([type & 0xFF, (type >> 8) & 0xFF, (type >> 16) & 0xFF, (type >>> 24) & 0xFF]));
+    }
+
+    get recapKind() {
+        return this.isLinkTrade ? '2 Player Trade' : 'Pool Trade';
+    }
+
+    logRecap() {
+        const gen = this.MSG_VEC.slice(-1);
+        const room = this.isLinkTrade ? `, Room ${this.room ?? '-'}` : '';
+        this.log(`Selected Gen ${gen}, ${this.recapKind}${room}, ${GSCTrading.LANGUAGE_NAMES[this.language] ?? 'English'} game`);
+    }
+
+    // 0 International, 1 Japanese, 2 Korean
+    static languageFamily(language) {
+        if (language === GSCTrading.KOREAN_LANGUAGE) return 2;
+        if (language === GSCTrading.JAPANESE_LANGUAGE) return 1;
+        return 0;
+    }
+
+    static languageFamilyName(family) {
+        return ['International', 'Japanese', 'Korean'][family] ?? 'International';
+    }
+
+    languageFamilySuggestion(ownFamily, otherFamily) {
+        return `Careful. You selected the ${GSCTrading.languageFamilyName(ownFamily)} version and the other user selected the ${GSCTrading.languageFamilyName(otherFamily)} version. `
+            + 'While it is still possible to do a Synchronous trade (assuming no Pokémon holds mail), it would be better to switch to a Buffered trade.';
+    }
+
+    /**
+     * Python do_version_check: VES from the server, then the peer's VEC
+     * (the server answers it for pools). A 4.2.0+ peer also sends its client
+     * type and game language and uses the new mail layout and sync positions.
+     */
+    async doVersionCheck() {
+        this.isGen2NewMail = false;
+        this.isNewSynchProtocol = false;
+        this.otherLanguage = null;
+        this.otherClientType = null;
+        this.ws.sendGetData(this.MSG_VES);
+        this.serverVersion = await this.waitForMessage(this.MSG_VES);
+        const peerVersion = await this.waitForMessage(this.MSG_VEC, 10000);
+        this.peerVersion = peerVersion && peerVersion.length > 0 ? peerVersion : null;
+        if (this.peerVersion && TradingProtocol.isVersionAtLeast(this.peerVersion, 4, 2, 0)) {
+            const clientType = await this.waitForMessage(this.MSG_CLN, 5000);
+            if (clientType && clientType.length >= 4) {
+                this.otherClientType = (clientType[0] | (clientType[1] << 8) | (clientType[2] << 16) | (clientType[3] << 24)) >>> 0;
+            }
+            if (this.MSG_LNG) {
+                const language = await this.waitForMessage(this.MSG_LNG, 5000);
+                if (language && language.length >= 1 && language[0] !== GSCTrading.SERVER_LANGUAGE) {
+                    this.otherLanguage = language[0];
+                }
+            }
+            this.isGen2NewMail = true;
+            this.isNewSynchProtocol = true;
+        }
+        if (this.otherLanguage !== null && !this.isBuffered) {
+            const own = GSCTrading.languageFamily(this.language);
+            const other = GSCTrading.languageFamily(this.otherLanguage);
+            if (own !== other) {
+                const suggestion = this.languageFamilySuggestion(own, other);
+                if (suggestion) this.log(suggestion);
+            }
+        }
+        return this.peerVersion;
+    }
+
     async startTrade() {
         // First, enter the room (only done once at the very beginning)
         this.log(`Starting GSC Trade Protocol (${this.tradeType} mode, ${this.isBuffered ? 'buffered' : 'sync'})...`);
 
-        // 4.1 behavior: send the client version immediately so the peer's
-        // version window can never miss it; the receive/decision stays in
-        // tradeStartingSequence.
-        this.ws.sendData(this.MSG_VEC, this.versionData());
+        // Version, language and client type go out immediately so the peer's
+        // receive windows can never miss them; the decision stays in
+        // doVersionCheck.
+        this.sendSessionIdentity();
+        this.logRecap();
+        await this.loadChecks();
 
         // Load default party data (ZUBAT) for ghost trades
         // IMPORTANT: Always load for link trades even if initially sync mode,
@@ -2435,10 +2516,6 @@ export class GSCTrading extends TradingProtocol {
         if (this.isLinkTrade && !GSCUtils.defaultPartyData) {
             await GSCUtils.loadDefaultPartyData();
         }
-
-        // Load Pokemon names for potential cross-version nickname replacement
-        await GSCUtils.loadPokemonNames();
-        if (this.defaultReceivedNames) await DefaultNames.load();
 
         // Initialize blank trade flags for data exchange tracking
         this.ownBlankTrade = true;
@@ -2486,8 +2563,7 @@ export class GSCTrading extends TradingProtocol {
 
 
         // Enter room - don't wait for peer (like ref impl does)
-        await this.enterRoom();
-        this.log("Entered Room.");
+        if (await this.enterRoom()) this.log("Entered Room.");
 
         // Outer loop for continuous trading - while True: loop
         while (!this.stopTrade) {
@@ -2588,6 +2664,8 @@ export class GSCTrading extends TradingProtocol {
      * Matches behavior when own_blank_trade or other_blank_trade is False.
      */
     async subsequentTradeSequence() {
+        // Python trade_starting_sequence: every sequence starts the checks afresh
+        this.checks?.resetSpeciesItemList?.();
         if (this.verbose) this.log(`[DEBUG] subsequentTradeSequence: Starting. ownCounterId=${this.ownCounterId}, peerCounterId=${this.peerCounterId}`);
         if (this.verbose) this.log(`[DEBUG] subsequentTradeSequence: ownBlankTrade=${this.ownBlankTrade}, otherBlankTrade=${this.otherBlankTrade}`);
 
@@ -2680,7 +2758,8 @@ export class GSCTrading extends TradingProtocol {
 
         await this.readSection(0, randomData, skipSync);
         this.gbPartyData = await this.readSection(1, tradeData.section1, skipSync);
-        await this.readSection(2, tradeData.section2, skipSync);
+        const gbPatchData = await this.readSection(2, tradeData.section2, skipSync);
+        GSCUtils.applyPatches(this.gbPartyData, gbPatchData, false);
 
         // === MAIL DETECTION (same as first trade) ===
         this.ownPartyHasMail = this.partyHasMail(this.gbPartyData);
@@ -2690,17 +2769,17 @@ export class GSCTrading extends TradingProtocol {
             if (this.verbose) this.log("[MAIL] Neither party has mail. Skipping Section 3 sync.");
         }
 
-        let mailToFeed = tradeData.section3;
-        if (this.isJapanese) {
-            mailToFeed = await this.convertMailData(tradeData.section3, true);
-        }
-        await this.readSection(this.getMailSectionId(), mailToFeed, skipSync);
+        this.updateMailTransferLayout(true);
+        const mailToFeed = await this.convertMailData(GSCTrading.updateMailData(tradeData.section3, true), true);
+        const gbMailData = await this.readSection(this.getMailSectionId(), mailToFeed, skipSync);
+        this.ownMailData = GSCTrading.updateMailData(await this.convertMailData(gbMailData, false), true);
 
-        // === Step 2: ALWAYS SEND MVS2 AFTER section exchange ===
-        // ref impl line 1460: self.comms.send_move_data_only() (unconditional)
-        // This sends my updated move data to peer after GB interaction
-        this.log("Sending MVS2 (move data) to peer...");
-        await this.sendMVS2();
+        // Python player_trade: moves follow the section exchange only after a
+        // completed trade; a re-sit with both sides blank exchanges none
+        if (!isReEntryWithCachedData) {
+            this.log("Sending MVS2 (move data) to peer...");
+            await this.sendMVS2();
+        }
 
         // === 1462-1463: Reset flags to True BEFORE entering trade menu ===
         // This is critical for resync: if the trade menu exits without completing,
@@ -2753,14 +2832,18 @@ export class GSCTrading extends TradingProtocol {
      * data = [pos, val, extra_val, is_filler, extra_bits]
      */
     writeSyncDataNew(data) {
-        const pos = data[0];
+        let pos = data[0];
         const val = data[1];
         const extraVal = data[2] || 0;
         const isFiller = data[3] ? 1 : 0;
         const extraBits = data[4] || 0;
 
+        // 9-bit 0x1FF is the sync marker, so a real 0x1FF goes out as 0x7FF;
+        // position bits 9-10 ride in the top of the section byte
+        if (pos === 0x1FF) pos = 0x7FF;
+        if (pos === 0xFFFF) pos = 0x1FF;
         const flags = ((pos >> 8) & 0x01) | ((extraBits & 0x3F) << 1) | (isFiller << 7);
-        return [flags, pos & 0xFF, val, extraVal];
+        return [flags, pos & 0xFF, val, (extraVal & 0x3F) | ((pos >> 3) & 0xC0)];
     }
 
     /**
@@ -2773,16 +2856,19 @@ export class GSCTrading extends TradingProtocol {
         const flags = data[pos];
         const posLo = data[pos + 1];
         const val = data[pos + 2];
-        const extraVal = data[pos + 3];
+        const extraVal = data[pos + 3] & 0x3F;
 
-        let fullPos = ((flags & 0x01) << 8) + posLo;
-        const isFiller = (flags >> 7) === 1;
-        const extraBits = (flags >> 1) & 0x3F;
+        let fullPos = ((flags & 0x01) << 8) + posLo + ((data[pos + 3] & 0xC0) << 3);
+        let isFiller = (flags >> 7) === 1;
+        let extraBits = (flags >> 1) & 0x3F;
 
         // 0x1FF marker means 0xFFFF (sync marker)
         if (fullPos === 0x1FF) {
             fullPos = 0xFFFF;
+            isFiller = false;
+            extraBits = 0;
         }
+        if (fullPos === 0x7FF) fullPos = 0x1FF;
 
         return [fullPos, val, extraVal, isFiller, extraBits];
     }
@@ -3021,9 +3107,28 @@ export class GSCTrading extends TradingProtocol {
     /**
      * Synchronous handshake: Wait for both clients to be ready for a section.
      */
+    /**
+     * Python synch_synch_section_new: the marker packet carries the previous
+     * synced section's last entries, so a peer still finishing that section
+     * gets its final bytes from it.
+     */
+    buildSyncPacket(index) {
+        if (!this.useNewProtocol || !this.lastSentSyncBuf) return this.createSyncPacket(index);
+        const buf = this.lastSentSyncBuf.map((entry) => [...entry]);
+        const last = this.TOTAL_SEND_BUF_NEW_BYTES - 1;
+        let minIndex = 0;
+        for (let i = 0; i < this.TOTAL_SEND_BUF_NEW_BYTES; i++) {
+            if (buf[i][0] < buf[minIndex][0]) minIndex = i;
+            buf[minIndex] = buf[last];
+        }
+        buf[last] = [0xFFFF, 0xFF, index, false, 0];
+        this.syncSeedBuf = buf;
+        return buf;
+    }
+
     async synchSynchSection(index) {
-        // Send sync marker packet
-        const sendBuf = this.createSyncPacket(index);
+        this.syncSeedBuf = null;
+        const sendBuf = this.buildSyncPacket(index);
         this.sendTradeData(sendBuf);
 
         this.log(`Sync Section ${index}: Waiting for peer synchronization...`);
@@ -3031,6 +3136,8 @@ export class GSCTrading extends TradingProtocol {
 
         let found = false;
         let wrongIndexMarkers = 0;
+        // Python read_section's last_index: every mail section (3/4/5) follows section 2
+        const previousSection = index >= GSCTrading.BASE_MAIL_INDEX ? 2 : index - 1;
         let waitIterations = 0;
         const MAX_SYNC_WAIT_ITERATIONS = 3000; // * ~100ms = ~5 minutes
         while (!found && !this.stopTrade) {
@@ -3061,12 +3168,23 @@ export class GSCTrading extends TradingProtocol {
                         found = true;
                         this.log(`Sync Section ${index}: Peer synchronized!`);
                     } else if (lastEntry && lastEntry[0] === 0xFFFF &&
-                               lastEntry[2] !== index && lastEntry[2] !== index - 1) {
+                               lastEntry[2] !== index && lastEntry[2] !== previousSection) {
                         // Python kills the trade when the peer's sync marker is
                         // for an unrelated section (incompatible trade states).
                         // A marker for the PREVIOUS section is just a straggler.
-                        if (++wrongIndexMarkers >= 5) {
-                            this.log(`[ERROR] Sync Section ${index}: Other player is at section ${lastEntry[2]} - incompatible trade state. Aborting.`);
+                        const families = { 3: 'International', 4: 'Japanese', 5: 'Korean' };
+                        // Another family's mail section can't be a leftover marker: stop at once like Python,
+                        // before the peer's own refusal closes the room
+                        const otherMailFamily = families[index] && families[lastEntry[2]];
+                        if (++wrongIndexMarkers >= 5 || otherMailFamily) {
+                            if (otherMailFamily) {
+                                // Different mail sections: games of different language families with mail held
+                                const detail = `You can't do a synchronous trade between the ${families[index]} and the ${families[lastEntry[2]]} version if a Pokémon holds mail. Do a Buffered trade, or remove the mail.`;
+                                this.log(`[ERROR] ${detail}`);
+                                this.onStatus?.('Synchronous trade not possible', 'error', detail);
+                            } else {
+                                this.log(`[ERROR] Sync Section ${index}: Other player is at section ${lastEntry[2]} - incompatible trade state. Aborting.`);
+                            }
                             this.stopTrade = true;
                             return;
                         }
@@ -3130,6 +3248,8 @@ export class GSCTrading extends TradingProtocol {
         // Send buffer data: track positions (8 for NEW, 2 for OLD protocol)
         // Entry format: [pos, val, extra_val, is_filler, extra_bits]
         const sendBufData = {};
+        // The marker packet's other entries stay until overwritten (Python reuses send_buf)
+        (this.syncSeedBuf || []).forEach((entry, i) => { sendBufData[i] = entry; });
         sendBufData[0] = [0, firstByte, index, false, 0];
         let sendIndex = 1;
         let recvData = {};
@@ -3145,8 +3265,11 @@ export class GSCTrading extends TradingProtocol {
             // instead of length * round-trips. A starved forced transfer feeds
             // NO_INPUT to the GB and counts as a dropped byte (bytesOffset),
             // exactly like Python; the section tail absorbs the slack.
-            const MAX_TOLERANCE_BYTES = 3;
+            // With a 3 + 1 byte offset the game skips the last byte of the
+            // last nickname, so 4.2.0+ peers use one byte less for the party
+            const MAX_TOLERANCE_BYTES = (this.isNewSynchProtocol && index === 1) ? 2 : 3;
             const SAFETY_AMOUNT = MAX_TOLERANCE_BYTES - 2;
+            const checker = this.getSectionChecker(index, false);
             const WAIT_POLL_MS = 4; // poll cadence while waiting on network data
             const MAX_MS_BETWEEN_TRANSFERS = 800; // Python max_seconds_between_transfers
             let posSend = 1;   // next position for our GB's bytes (0 = firstByte)
@@ -3163,17 +3286,19 @@ export class GSCTrading extends TradingProtocol {
                 if (recvBuf) {
                     Object.assign(recvData, this.getSwappableBytesNew(recvBuf, length, index));
                     while (recvData[posRecv] !== undefined && posRecv < length) {
-                        const raw = recvData[posRecv] & 0xFF;
-                        // Python prevent_no_input: the receiver converts the
-                        // NO_INPUT control code to 0xFF before it can reach the GB
-                        otherBuf.push(raw === 0xFE ? 0xFF : raw);
+                        // The checks run on the peer's bytes before the GB sees
+                        // them and may emit zero or several bytes; Python
+                        // prevent_no_input then escapes NO_INPUT to 0xFF
+                        otherBuf.push(...this.preventNoInputList(checker[posRecv](recvData[posRecv] & 0xFF)));
                         posRecv++;
                         const fill = fillers[posRecv];
-                        if (fill) {
+                        if (fill && posRecv === otherBuf.length) {
+                            let added = 0;
                             for (let j = 0; j < fill[0] && posRecv + j < length; j++) {
-                                otherBuf.push(fill[1]);
+                                otherBuf.push(...this.preventNoInputList(checker[posRecv + j](fill[1])));
+                                added++;
                             }
-                            posRecv = Math.min(posRecv + fill[0], length);
+                            posRecv += added;
                         }
                     }
                 }
@@ -3183,10 +3308,10 @@ export class GSCTrading extends TradingProtocol {
                 if (Date.now() - lastTransfer >= MAX_MS_BETWEEN_TRANSFERS) schedule = true;
                 if (bytesOffset < bytesOffsetTarget) {
                     schedule = true;
-                } else if (posRecv > iFeed) {
+                } else if (otherBuf.length > iFeed) {
                     byteToConsole = this.peerFeedByte(index, iFeed, otherBuf[iFeed], otherBuf);
                     otherBuf[iFeed] = byteToConsole;
-                    if (posRecv > (iFeed + SAFETY_AMOUNT)) schedule = true;
+                    if (otherBuf.length > (iFeed + SAFETY_AMOUNT)) schedule = true;
                     if (schedule) {
                         iFeed++;
                         // Filler bytes exist in otherBuf but are never fed to the device
@@ -3258,6 +3383,9 @@ export class GSCTrading extends TradingProtocol {
                 iFeed++;
                 await this.sleep(WAIT_POLL_MS);
             }
+
+            this.lastSentSyncBuf = Array.from({ length: this.TOTAL_SEND_BUF_NEW_BYTES },
+                (_, i) => sendBufData[i] ? [...sendBufData[i]] : [0xFFFF, 0xFF, index, false, 0]);
 
             // Python pads both buffers to the section length
             while (buf.length < length) buf.push(this.NO_DATA);
@@ -3438,80 +3566,97 @@ export class GSCTrading extends TradingProtocol {
     /**
      * Sends the entire trade data (Random + Party + Patch + Mail) in one FLL2 packet.
      */
+    // Sections exchanged with the peer: pre-4.2.0 peers use the old mail layout
+    get bigTradingLengths() {
+        return this.isGen2NewMail ? this.SPECIAL_SECTIONS_LEN : (this.SPECIAL_SECTIONS_LEN_OLD ?? this.SPECIAL_SECTIONS_LEN);
+    }
+
     async sendBigTradingData(randomData, tradeData) {
-        // The receiver splits the payload by SPECIAL_SECTIONS_LEN, so every
-        // section is sent at full length and in order.
-        const totalSize = this.SPECIAL_SECTIONS_LEN.reduce((a, b) => a + b, 0);
-        const fullData = new Uint8Array(totalSize);
+        const lengths = this.bigTradingLengths;
+        const mail = tradeData.section3 && lengths.length > 3
+            ? GSCTrading.updateMailData(GSCTrading.updateMailData(tradeData.section3, true), this.isGen2NewMail)
+            : tradeData.section3;
+        const sections = [randomData, tradeData.section1, tradeData.section2, mail];
+        const fullData = new Uint8Array(lengths.reduce((a, b) => a + b, 0));
         let offset = 0;
-
-        // 1. Random Data (10 bytes)
-        fullData.set(randomData, offset);
-        offset += this.SPECIAL_SECTIONS_LEN[0];
-
-        // 2. Party Data (0x1BC)
-        fullData.set(tradeData.section1, offset);
-        offset += this.SPECIAL_SECTIONS_LEN[1];
-
-        // 3. Patch Data (0x1BC)
-        fullData.set(tradeData.section2, offset);
-        offset += this.SPECIAL_SECTIONS_LEN[2];
-
-        // 4. Mail Data (0x1BC)
-        // If we don't have it, fill with 0
-        if (tradeData.section3) {
-            fullData.set(tradeData.section3, offset);
+        for (let i = 0; i < lengths.length; i++) {
+            if (sections[i]) fullData.set(sections[i].slice(0, lengths[i]), offset);
+            offset += lengths[i];
         }
-
-        this.log(`Sending FLL2 Data: ${fullData.length} bytes`);
-        this.ws.sendData("FLL2", fullData);
+        this.log(`Sending ${this.MSG_FLL} Data: ${fullData.length} bytes`);
+        this.ws.sendData(this.MSG_FLL, fullData);
     }
 
     async getBigTradingData() {
-        this.log("Waiting for FLL2 (Full Trade Data)...");
-        this.ws.sendGetData("FLL2");
+        this.log(`Waiting for ${this.MSG_FLL} (Full Trade Data)...`);
+        this.ws.sendGetData(this.MSG_FLL);
         // The other player may not have sat down yet - wait at human timescale
-        const data = await this.waitForMessage("FLL2", 300000);
-
+        const data = await this.waitForMessage(this.MSG_FLL, 300000);
         if (!data) return null;
-
-        this.log(`Received FLL2 Data: ${data.length} bytes`);
-
-        // Unpack
-        const sections = [];
-        let offset = 0;
-        for (let len of this.SPECIAL_SECTIONS_LEN) {
-            sections.push(data.slice(offset, offset + len));
-            offset += len;
-        }
-
-        return sections;
+        this.log(`Received ${this.MSG_FLL} Data: ${data.length} bytes`);
+        return this.unpackFLL2(data);
     }
 
     /**
-     * Unpack raw FLL2 data (Uint8Array) into sections array.
+     * Unpack raw full trade data into sections, by its length (both mail
+     * layouts are legal), with mail converted to the new layout.
      */
     unpackFLL2(data) {
+        const newTotal = this.SPECIAL_SECTIONS_LEN.reduce((a, b) => a + b, 0);
+        const lengths = data.length >= newTotal ? this.SPECIAL_SECTIONS_LEN : (this.SPECIAL_SECTIONS_LEN_OLD ?? this.SPECIAL_SECTIONS_LEN);
         const sections = [];
         let offset = 0;
-        for (let len of this.SPECIAL_SECTIONS_LEN) {
+        for (const len of lengths) {
             sections.push(data.slice(offset, offset + len));
             offset += len;
         }
+        if (sections.length > 3) sections[3] = GSCTrading.updateMailData(sections[3], true);
         return sections;
     }
 
     // ==================== READ SECTION (HANDLES BOTH MODES) ====================
 
+    /**
+     * Python read_section (buffered): the device-bound bytes are the checked
+     * section; a checker may emit zero or several bytes, so fillers are only
+     * expanded once the output has caught up with the input position.
+     */
+    checkedSectionData(source, length, fillers, checker, index) {
+        const out = [];
+        let i = 0;
+        while (i < length) {
+            out.push(...this.preventNoInputList(checker[i](source[i] ?? 0)));
+            i++;
+            const fill = fillers[i];
+            if (fill && i === out.length) {
+                for (let j = 0; j < fill[0]; j++) {
+                    out.push(...this.preventNoInputList(checker[i + j](source[i + j] ?? 0)));
+                }
+                i += fill[0];
+            }
+        }
+        if (index === 1 && this.jpNameSixthBytes) {
+            for (const pos of this.jpNameSixthBytes.keys()) {
+                if (pos < out.length) out[pos] = this.jpTerminatedByte(pos, out[pos], out);
+            }
+        }
+        return out;
+    }
+
     async readSection(index, dataToSend, skipSync = false) {
-        const length = this.getSectionLength(index);
+        // A sequence keeps calling this after an aborted section; checks must not run on what was never read
+        if (this.stopTrade) throw new Error('Trade stopped');
+        // Python reads the random section, mail without any, and every pool or
+        // buffered section in buffered mode
+        const bufferedRead = this.isBuffered || skipSync || !this.isLinkTrade || index === 0;
+        // Python read_section: the random section starts a sequence afresh (just_sent = None)
+        if (index === 0) this.lastSentSyncBuf = null;
+        const length = this.getSectionLength(index, bufferedRead);
         const sectionFillers = this.SECTION_FILLERS?.[index] || {};
-        if (this.defaultReceivedNames && (index === 1 || index === 2)) {
-            const fix = index === 1
-                ? (b) => this.applyDefaultNicknames(b)
-                : (b) => this.neutralizeNicknamePatches(b);
-            if (this.bufferedOtherData?.[index]) fix(this.bufferedOtherData[index]);
-            if (dataToSend) dataToSend = fix(new Uint8Array(dataToSend));
+        this.prepareChecksForSection();
+        if (index === 2 && this.replacesNames) {
+            if (this.bufferedOtherData?.[index]) this.neutralizeNicknamePatches(this.bufferedOtherData[index]);
+            if (dataToSend) dataToSend = this.neutralizeNicknamePatches(new Uint8Array(dataToSend));
         }
 
         // ==================== 1. BUFFERED MODE (ASYNC) ====================
@@ -3523,7 +3668,7 @@ export class GSCTrading extends TradingProtocol {
 
             // The preamble below runs in buffered mode too; the peer's cached
             // bytes are fed to the device after it.
-            this.log(`Buffered Read Section ${index}: Using local data from FLL2 buffer.`);
+            this.log(`Buffered Read Section ${index}: Using local data from ${this.MSG_FLL} buffer.`);
         }
 
         // ==================== SHARED PREAMBLE (Wake up GB) ====================
@@ -3541,6 +3686,7 @@ export class GSCTrading extends TradingProtocol {
 
         if (useSyncForSection) {
             await this.synchSynchSection(index);
+            if (this.stopTrade) throw new Error('Trade stopped');
         }
 
         // 2. Preamble Stage 1: Wait for Starter (0xFD)
@@ -3584,10 +3730,27 @@ export class GSCTrading extends TradingProtocol {
                 if (next !== starter) break;
             }
         } else {
+            const isMailSection = index === this.getMailSectionId();
+            let firstExchange = true;
             while ((next === starter ||
                     (next === this.NO_DATA && index === 1)) && !this.stopTrade) {
                 await this.sleep(PREAMBLE_PACING_MS);
                 next = await this.exchangeByte(starter);
+                // Korean games open the mail section with a different starter
+                if (isMailSection && firstExchange && !this.isJapanese) {
+                    const isKorean = this.language === GSCTrading.KOREAN_LANGUAGE;
+                    const otherStarter = isKorean ? GSCTrading.MAIL_STARTER : GSCTrading.MAIL_STARTER_KOREAN;
+                    if (next === otherStarter) {
+                        const gameLanguage = isKorean ? 'English' : 'Korean';
+                        this.log(`It looks like the selected language for the data trade is wrong. You chose the ${GSCTrading.LANGUAGE_NAMES[this.language]} language, but the game is in ${gameLanguage}. Please restart the data trade with the proper language option selected.`);
+                        this.onStatus?.('Wrong game language selected', 'error', isKorean
+                            ? 'The game is not Korean. Set Game Language to your game\'s language and restart.'
+                            : 'The game is in Korean. Set Game Language to Korean and restart.');
+                        this.stopTrade = true;
+                        throw new Error('Game language does not match the selected language');
+                    }
+                }
+                firstExchange = false;
                 if (++preambleIterations > MAX_PREAMBLE_ITERATIONS) {
                     this.log(`[ERROR] Section ${index}: Game Boy stuck in preamble`);
                     this.stopTrade = true;
@@ -3601,40 +3764,33 @@ export class GSCTrading extends TradingProtocol {
 
         // ==================== 2. DATA EXCHANGE ====================
 
-        // A. BUFFERED MODE EXECUTION (Only when we have peer's data - Pass 2)
-        if (useBufferedRead) {
-            const receivedData = new Uint8Array(length);
-            const peerSectionData = this.bufferedOtherData[index];
-
-            receivedData[0] = next; // Store first byte from GB
-
-            // Loop for the rest
-            for (let i = 0; i < length - 1; i++) {
-                // JP filler ranges are not exchanged with the device; the
-                // in-memory image gets the filler value (Python read_section)
-                const fill = sectionFillers[i + 1];
-                if (fill) {
-                    for (let j = 0; j < fill[0]; j++) receivedData[i + 1 + j] = fill[1];
-                    i += fill[0] - 1;
-                    continue;
+        // A. BUFFERED / POOL MODE EXECUTION: the peer's cached section (or
+        // the pool/ghost data) is checked and fed to the device
+        if (useBufferedRead || !useSyncForSection) {
+            const source = useBufferedRead ? this.bufferedOtherData[index] : dataToSend;
+            const checker = this.getSectionChecker(index, bufferedRead);
+            const sending = this.checkedSectionData(source || [], length, sectionFillers, checker, index);
+            // Python read_section's other_buf: the checked copy the device got
+            this.fedSections[index] = new Uint8Array(sending);
+            const receivedData = [next];
+            let i = 0;
+            while (i < length - 1 && !this.stopTrade) {
+                receivedData.push(await this.exchangeByte(sending[i]));
+                i++;
+                const recvFill = sectionFillers[receivedData.length];
+                if (recvFill) {
+                    for (let j = 0; j < recvFill[0]; j++) receivedData.push(recvFill[1]);
                 }
-                // Send peer's byte (from our buffer) to GB.
-                // 0xFE is the "no input" control code and never legal section
-                // data - Python prevent_no_input escapes it to 0xFF.
-                let sendByte = peerSectionData[i]; // Send Byte 0 now (for the NEXT exchange)
-                if (sendByte === this.NO_INPUT) sendByte = 0xFF;
-                const recvByte = await this.exchangeByte(sendByte);
-                receivedData[i + 1] = recvByte;
-                this.onProgress?.(index, i + 2, length);
-
-                if (i < 10) {
-                    this.log(`Buf Byte ${i}: Send=${sendByte.toString(16)}, Recv=${recvByte.toString(16)}`);
-                }
+                const sendFill = sectionFillers[i];
+                if (sendFill) i += sendFill[0];
+                this.onProgress?.(index, Math.min(i + 1, length), length);
             }
+            await this.exchangeByte(sending[length - 1] ?? this.NO_DATA);
             for (let j = 0; j < (this.EXTRA_SECTION_DROPS?.[index] || 0); j++) {
                 await this.exchangeByte(this.NO_DATA);
             }
-            return receivedData;
+            while (receivedData.length < length) receivedData.push(this.NO_DATA);
+            return new Uint8Array(receivedData.slice(0, length));
         }
 
         // B. SYNC MODE EXECUTION
@@ -3660,46 +3816,6 @@ export class GSCTrading extends TradingProtocol {
         }
 
 
-        // C. POOL / SIMPLE MODE EXECUTION
-        const receivedData = new Uint8Array(length);
-        receivedData[0] = next;
-
-        for (let i = 0; i < length - 1; i++) {
-            // JP filler ranges are not exchanged with the device; the
-            // in-memory image gets the filler value (Python read_section)
-            const fill = sectionFillers[i + 1];
-            if (fill) {
-                for (let j = 0; j < fill[0]; j++) receivedData[i + 1 + j] = fill[1];
-                i += fill[0] - 1;
-                continue;
-            }
-            let val = 0x00;
-            if (dataToSend && i < dataToSend.length) {
-                val = dataToSend[i]; // Send byte i (starts at 0)
-                // Python prevent_no_input: 0xFE is never legal device-bound data
-                if (val === this.NO_INPUT) val = 0xFF;
-            }
-
-            const recvByte = await this.exchangeByte(val);
-            receivedData[i + 1] = recvByte;
-            this.onProgress?.(index, i + 2, length);
-        }
-
-
-        // This is critical - without it GB receives incomplete data!
-        if (dataToSend && dataToSend.length >= length) {
-            let lastVal = dataToSend[length - 1];
-            if (lastVal === this.NO_INPUT) lastVal = 0xFF;
-            await this.exchangeByte(lastVal);
-        } else {
-            await this.exchangeByte(0x00);
-        }
-
-        for (let j = 0; j < (this.EXTRA_SECTION_DROPS?.[index] || 0); j++) {
-            await this.exchangeByte(this.NO_DATA);
-        }
-
-        return receivedData;
     }
 
     async waitForMessage(type, timeoutMs = 30000) {

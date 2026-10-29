@@ -15,15 +15,32 @@ export class TradingProtocol {
 
         this.NO_DATA = 0x00;
         this.NO_INPUT = 0xFE;
+
+        // Index of the ENTER_ROOM_STATES state that sends the room byte (Gen 2), null for none
+        this.ROOM_SYNC_STATE = 2;
+        this.ROOM_SYNC_QUIET_BYTES = 8;
+        this.ROOM_SYNC_QUIET_MS = 300;
     }
 
     log(msg) {
         this.logger(msg);
     }
 
-    // TradingVersion 4.1.0 (little-endian 16-bit major/minor/build)
+    static CLIENT_TYPE_JS_USB = 4;
+    static CLIENT_TYPE_JS_EMU_BGB = 5;
+
+    // TradingVersion 5.0.1 (little-endian 16-bit major/minor/build)
     versionData() {
-        return new Uint8Array([4, 0, 1, 0, 0, 0]);
+        return new Uint8Array([5, 0, 0, 0, 1, 0]);
+    }
+
+    static isVersionAtLeast(data, major, minor, build) {
+        if (!data || data.length < 6) return false;
+        const parsed = [data[0] | (data[1] << 8), data[2] | (data[3] << 8), data[4] | (data[5] << 8)];
+        for (const [have, want] of [[parsed[0], major], [parsed[1], minor], [parsed[2], build]]) {
+            if (have !== want) return have > want;
+        }
+        return true;
     }
 
     // Log only if verbose mode is enabled
@@ -45,9 +62,11 @@ export class TradingProtocol {
         let stateIndex = 0;
         let consecutiveNoData = 0;
         let readFailures = 0;
+        const lastState = this.ENTER_ROOM_STATES[0].length - 1;
+        this.resetRoomSync();
 
-        while (stateIndex < this.ENTER_ROOM_STATES[0].length && !this.stopTrade) {
-            const nextByte = this.ENTER_ROOM_STATES[0][stateIndex];
+        while ((stateIndex <= lastState || !this.roomSyncSettled()) && !this.stopTrade) {
+            const nextByte = this.ENTER_ROOM_STATES[0][Math.min(stateIndex, lastState)];
 
             // Send byte to GB
             await this.usb.writeByte(nextByte);
@@ -59,6 +78,14 @@ export class TradingProtocol {
                 readFailures = 0;
             } catch (e) {
                 recv = this.failedRead(e, ++readFailures);
+            }
+
+            const heldIndex = this.holdRoomSync(this.ENTER_ROOM_STATES, stateIndex, recv);
+            if (heldIndex !== stateIndex || stateIndex > lastState) {
+                if (heldIndex !== stateIndex) this.logVerbose(`Room byte repeated, back to state ${heldIndex}`);
+                stateIndex = heldIndex;
+                await this.sleep(5);
+                continue;
             }
 
             // Check if response matches expected state
@@ -97,8 +124,31 @@ export class TradingProtocol {
 
         }
 
+        if (this.stopTrade) return false;
         this.log("Entered Room!");
         return true;
+    }
+
+    // Gen 2 games keep resending the room byte, with 0x00/0xFE in between, until they
+    // have read ours: fall back to sending it, and only leave once they have stopped.
+    resetRoomSync() {
+        this.roomSyncQuiet = { since: 0, count: 0 };
+    }
+
+    holdRoomSync(states, index, recv) {
+        const roomState = this.ROOM_SYNC_STATE;
+        if (roomState === null || recv !== states[0][roomState]) {
+            this.roomSyncQuiet.count++;
+            return index;
+        }
+        this.roomSyncQuiet = { since: Date.now(), count: 0 };
+        return Math.min(index, roomState);
+    }
+
+    roomSyncSettled() {
+        return this.ROOM_SYNC_STATE === null
+            || (this.roomSyncQuiet.count >= this.ROOM_SYNC_QUIET_BYTES
+                && Date.now() - this.roomSyncQuiet.since >= this.ROOM_SYNC_QUIET_MS);
     }
 
     /**

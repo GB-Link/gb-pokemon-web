@@ -225,11 +225,15 @@ export class BgbConnection {
     constructor(target) {
         this.isConnected = false;
         this.isNewFirmware = true;
+        // The emulator answers "not ready" while the game is busy, which reads as no data;
+        // fast battle polling hits those windows and closes battles (Python paces BGB at 100 ms)
+        this.minBattlePollMs = 50;
         this._target = Object.assign({ mode: 'connect', host: '127.0.0.1', port: 8765 }, target);
         this._engine = null;
         this._fatalMessage = null;
         this._frameQueue = [];
         this._frameWaiters = [];
+        this.onLinkLost = null;
     }
 
     async connect() {
@@ -416,6 +420,7 @@ export class BgbConnection {
         this._engine = null;
         this._fatalMessage = message;
         console.error('BGB link lost:', message);
+        if (this.onLinkLost) this.onLinkLost(message);
         for (const w of this._frameWaiters.splice(0)) w.reject(new Error(message));
     }
 }

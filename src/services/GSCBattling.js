@@ -12,11 +12,10 @@
  * identical seed) so the two games' battle RNGs stay in lockstep.
  */
 
-import { GSCTrading } from './GSCTrading.js?v=92';
-import { GSCUtils } from './GSCUtils.js?v=92';
-import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=92';
-import { GSCTradingData } from './GSCTradingDataUtils.js?v=92';
-import { DefaultNames } from './DefaultNames.js?v=92';
+import { GSCTrading } from './GSCTrading.js?v=93';
+import { GSCUtils } from './GSCUtils.js?v=93';
+import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=93';
+import { GSCTradingData } from './GSCTradingDataUtils.js?v=93';
 
 export class GSCBattling extends GSCTrading {
     constructor(usb, ws, logger, tradeType = 'battle', isBuffered = false, doSanityChecks = true, options = {}) {
@@ -45,14 +44,11 @@ export class GSCBattling extends GSCTrading {
         // same filler block as the JP trade layout
         this.SECTION_FILLERS = [{}, {}, {}];
         this.EXTRA_SECTION_DROPS = [0, 0, 0];
+        this.jpNameSixthBytes = null;
         if (this.isJapanese) {
-            const fillers = {};
-            fillers[6] = [5, 0x50]; // trainer name
-            for (let i = 0; i < 12; i++) { // 6 OT names + 6 nicknames
-                fillers[0x13B + i * 0x0B] = [5, 0x50];
-            }
-            this.SECTION_FILLERS[1] = fillers;
+            this.SECTION_FILLERS[1] = GSCTrading.jpNameFillers(0x13A);
             this.EXTRA_SECTION_DROPS[1] = 4;
+            this.jpNameSixthBytes = GSCTrading.jpNameSixthBytes(0x13A);
         }
 
         // ==================== BATTLE MENU BYTES ====================
@@ -79,6 +75,7 @@ export class GSCBattling extends GSCTrading {
         this.OPTION_CONFIRMATION_THRESHOLD = 10;
         this.RESENDS_LIMIT_TRADE = 20;
         this.MAX_CONSECUTIVE_NO_DATA = 0x100;
+        this.NO_DATA_STOP_MS = 5000;
 
         // ==================== BATTLE STATE ====================
         this.currOwnMonIndex = 0;
@@ -126,17 +123,10 @@ export class GSCBattling extends GSCTrading {
     // ==================== DATA LOADING ====================
 
     async loadBattleData() {
-        if (this.doSanityChecks && this.checks.load) {
-            const loaded = await this.checks.load();
-            if (!loaded) {
-                this.log('[WARN] Could not load sanity check data, continuing without checks');
-                this.checks.doSanityChecks = false;
-            }
-        }
+        await this.loadChecks();
         // Needed even without checks: noMailSection for createTradingData and
         // movesPpList for healing
         await GSCUtils.load();
-        if (this.defaultReceivedNames) await DefaultNames.load();
         await this.loadBattleBaseData();
     }
 
@@ -168,23 +158,6 @@ export class GSCBattling extends GSCTrading {
             offset += len;
         }
         return sections;
-    }
-
-    /**
-     * Run the per-byte sanity checks over the peer's section before it is
-     * decoded. A no-op when the checks engine has no map for the section.
-     */
-    sanitizePeerSection(index, wireBytes) {
-        if (!this.checks.getChecker || !this.checks.applyChecksToData) return;
-        const checker = this.checks.getChecker(index);
-        if (!checker) return;
-        this.checks.prepareTextBuffer?.();
-        this.checks.preparePatchSetsBuffer?.();
-        this.checks.prepareSpeciesBuffer?.();
-        const cleaned = this.checks.applyChecksToData(checker, wireBytes);
-        for (let i = 0; i < wireBytes.length && i < cleaned.length; i++) {
-            wireBytes[i] = cleaned[i];
-        }
     }
 
     // ==================== LOCK SWAP (inter-turn polling suspension) ====================
@@ -229,11 +202,21 @@ export class GSCBattling extends GSCTrading {
      * Advance through a fixed sequence of states. With dieOnNoData, 0x100
      * consecutive 0x00 replies at state 0 mean the player left the room.
      */
-    async sendPredefinedSection(statesList, initialSending = 0, dieOnNoData = false) {
+    async sendPredefinedSection(statesList, initialSending = 0, dieOnNoData = false, roomSync = false) {
         let sending = initialSending;
         let consecutiveNoData = 0;
-        while (sending < statesList[0].length && !this.stopTrade) {
-            const recv = await this.exchangeByte(statesList[0][sending]);
+        const lastState = statesList[0].length - 1;
+        this.resetRoomSync();
+        while ((sending <= lastState || (roomSync && !this.roomSyncSettled())) && !this.stopTrade) {
+            const recv = await this.exchangeByte(statesList[0][Math.min(sending, lastState)]);
+            if (roomSync) {
+                const held = this.holdRoomSync(statesList, sending, recv);
+                if (held !== sending || sending > lastState) {
+                    sending = held;
+                    await this.sleep(5);
+                    continue;
+                }
+            }
             const expected = statesList[1][sending];
             const matched = expected instanceof Set ? expected.has(recv)
                 : Array.isArray(expected) ? expected.includes(recv)
@@ -258,7 +241,7 @@ export class GSCBattling extends GSCTrading {
 
     async enterRoom() {
         this.log("Entering the battle room...");
-        await this.sendPredefinedSection(this.ENTER_ROOM_STATES);
+        if (!await this.sendPredefinedSection(this.ENTER_ROOM_STATES, 0, false, true)) return false;
         this.log("Entered the battle room.");
         return true;
     }
@@ -340,16 +323,21 @@ export class GSCBattling extends GSCTrading {
         await this.doVersionCheckBattle();
     }
 
+    get recapKind() {
+        return '2 Player Battle';
+    }
+
+    // Python GSCBattling: battles never suggest switching to buffered
+    languageFamilySuggestion() {
+        return null;
+    }
+
     async doVersionCheckBattle() {
         this.useNewProtocol = false;
-        this.ws.sendGetData(this.MSG_VES);
-        const serverVersion = await this.waitForMessage(this.MSG_VES, 5000);
-        if (serverVersion) {
-            const peerVersion = await this.waitForMessage(this.MSG_VEC, 10000);
-            if (peerVersion && peerVersion.length > 0) {
-                this.useNewProtocol = true;
-                this.log("Peer supports the NEW sync protocol (32-byte packets)");
-            }
+        const peerVersion = await this.doVersionCheck();
+        if (this.serverVersion && peerVersion) {
+            this.useNewProtocol = true;
+            this.log("Peer supports the NEW sync protocol (32-byte packets)");
         }
         if (!this.useNewProtocol) {
             // withdraw our version so the peer's
@@ -404,12 +392,10 @@ export class GSCBattling extends GSCTrading {
         if (!buffered && (!this.peerPartyData || !this.peerPatchData)) {
             throw new Error('Peer battle data missing after the synchronous exchange');
         }
-        const otherParty = new Uint8Array(!buffered ? this.peerPartyData : sendData[1]);
-        const otherPatch = new Uint8Array(!buffered ? this.peerPatchData : sendData[2]);
-        // Any byte the checks have to fix here will differ from the peer's
-        // BFL copy, which is what aborts a tampered battle
-        this.sanitizePeerSection(1, otherParty);
-        this.sanitizePeerSection(2, otherPatch);
+        // The checked copies the device got: any byte the checks had to fix
+        // differs from the peer's BFL copy, which is what aborts a tampered battle
+        const otherParty = new Uint8Array(!buffered ? this.peerPartyData : this.fedSections[1]);
+        const otherPatch = new Uint8Array(!buffered ? this.peerPatchData : this.fedSections[2]);
         this.utilsClass.applyPatches(otherParty, otherPatch, false);
 
         if (!buffered) {
@@ -516,8 +502,13 @@ export class GSCBattling extends GSCTrading {
      * Send counter + rng echo + party + patches (plus the gen 2 no-mail
      * block that createTradingData always appends).
      */
+    // Python create_sendable_big_trading_data: the mail block follows the peer's layout
+    createSendableBigTradingData() {
+        return this.ownPokemon.createTradingData(this.SPECIAL_SECTIONS_LEN, this.isGen2NewMail);
+    }
+
     sendBigBattleTradingData() {
-        const sections = this.ownPokemon.createTradingData();
+        const sections = this.createSendableBigTradingData();
         if (this.ownCounterId === undefined) {
             this.ownCounterId = Math.floor(Math.random() * 256);
         }
@@ -684,10 +675,16 @@ export class GSCBattling extends GSCTrading {
      * A value only counts once it repeats for threshold consecutive reads.
      * threshold 0 accepts the first hit (including 0x00 when breakOnNoData).
      */
+    // Choice polling pace: a transport can ask for slower polling (BGB reports a busy game as no data)
+    get battlePollMs() {
+        return Math.max(20, this.usb?.minBattlePollMs ?? 0);
+    }
+
     async waitForSetOfValues(next, values, breakOnNoData = false, threshold = null) {
         let foundVal = next;
         let consecutiveReads = 0;
         let specialMode = false;
+        let runStart = Date.now();
         if (threshold === null) threshold = this.OPTION_CONFIRMATION_THRESHOLD;
         if (threshold === 0) {
             threshold = 1;
@@ -698,13 +695,19 @@ export class GSCBattling extends GSCTrading {
             const doCheck = values.has(next) || (breakOnNoData && next === this.NO_DATA);
             if (doCheck) {
                 if (next === foundVal) consecutiveReads++;
-                else consecutiveReads = 0;
+                else {
+                    consecutiveReads = 0;
+                    runStart = Date.now();
+                }
                 if (specialMode) consecutiveReads = threshold;
+                // BGB reports a briefly busy game as no data: a stop also needs a lasting silence
+                else if (next === this.NO_DATA && consecutiveReads >= threshold
+                    && Date.now() - runStart < this.NO_DATA_STOP_MS) consecutiveReads = threshold - 1;
             } else {
                 consecutiveReads = 0;
             }
             foundVal = next;
-            await this.sleep(20);
+            await this.sleep(this.battlePollMs);
         }
         return next;
     }
@@ -735,7 +738,7 @@ export class GSCBattling extends GSCTrading {
             }
             foundVal = next;
             if (Date.now() - start >= timeoutMs) break;
-            await this.sleep(20);
+            await this.sleep(this.battlePollMs);
         }
         return next;
     }
@@ -757,7 +760,7 @@ export class GSCBattling extends GSCTrading {
         while (next !== this.NO_INPUT && !this.stopTrade) {
             next = await this.exchangeByte(this.NO_INPUT);
             if (Date.now() - start >= timeoutMs) break;
-            await this.sleep(20);
+            await this.sleep(this.battlePollMs);
         }
         return next;
     }
@@ -905,7 +908,10 @@ export class GSCBattling extends GSCTrading {
                 this.sendChosenOption(sentChoice);
                 this.log("Waiting for the other player's choice...");
                 const receivedData = await this.getChosenOption();
-                if (!receivedData) break;
+                if (!receivedData) {
+                    if (!this.stopTrade) this.log("[ERROR] The other player's choice never arrived - leaving the battle.");
+                    break;
+                }
                 receivedChoice = receivedData[0];
                 if (!receivedData[1]) {
                     this.log("[WARN] Issue detected with the command sent by the other player!");
@@ -1012,9 +1018,10 @@ export class GSCBattling extends GSCTrading {
         this.isVersionCheckDone = false;
         this.hasGhosted = false;
 
-        // 4.1 behavior: send the client version immediately; the check itself
-        // runs after the reseed ack
-        this.ws.sendData(this.MSG_VEC, this.versionData());
+        // Version, language and client type go out immediately; the check
+        // itself runs after the reseed ack
+        this.sendSessionIdentity();
+        this.logRecap();
 
         // Pre-populate + early-send the buffered preference so the peer's
         // negotiator GET is always answerable (same prelude as the trades)

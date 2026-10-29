@@ -1,7 +1,7 @@
 
-import { GSCUtils } from './GSCUtils.js?v=92';
-import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=92';
-import { GSCTradingData, GSCTradingText } from './GSCTradingDataUtils.js?v=92';
+import { GSCUtils, pySlice } from './GSCUtils.js?v=93';
+import { GSCTradingText } from './GSCTradingDataUtils.js?v=93';
+import { PokemonNamesForGen } from './TextConversions.js?v=93';
 
 // ==================== RSESPUtils ====================
 
@@ -33,6 +33,7 @@ export class RSESPUtils extends GSCUtils {
     static exp_groups = null;
     static exp_lists = null;
     static egg_nick = null;
+    static base_friendship = null;
     static text_conv_dict = null;
     static enc_positions = null;
     static loaded = false;
@@ -58,7 +59,7 @@ export class RSESPUtils extends GSCUtils {
     }
 
     static async load() {
-        if (this.loaded) return;
+        if (this.loaded) return true;
 
         this.enc_positions = this.init_enc_positions();
 
@@ -67,7 +68,7 @@ export class RSESPUtils extends GSCUtils {
         // Load binary files
         const [
             invalidHeldItems, invalidPokemon, abilities, stats,
-            movesPpList, expGroups, eggNick
+            movesPpList, expGroups, eggNick, baseFriendship
         ] = await Promise.all([
             this.fetchBin(folder + "invalid_held_items.bin"),
             this.fetchBin(folder + "invalid_pokemon.bin"),
@@ -76,6 +77,7 @@ export class RSESPUtils extends GSCUtils {
             this.fetchBin(folder + "moves_pp_list.bin"),
             this.fetchBin(folder + "pokemon_exp_groups.bin"),
             this.fetchBin(folder + "egg_nick.bin"),
+            this.fetchBin(folder + "base_friendship.bin"),
         ]);
 
         this.invalid_held_items = invalidHeldItems;
@@ -84,6 +86,7 @@ export class RSESPUtils extends GSCUtils {
         this.moves_pp_list = movesPpList;
         this.exp_groups = expGroups;
         this.egg_nick = eggNick ? Array.from(eggNick) : null;
+        this.base_friendship = baseFriendship ? Array.from(baseFriendship) : null;
 
         // Parse stats: num_entries entries, each num_stats bytes
         if (stats) {
@@ -152,8 +155,10 @@ export class RSESPUtils extends GSCUtils {
             }
         }
 
+        await PokemonNamesForGen.load();
+
         this.loaded = true;
-        console.log("[RSESPUtils] Loaded all Gen 3 data files");
+        return true;
     }
 
     static async fetchBin(path) {
@@ -187,11 +192,11 @@ export class RSESPUtils extends GSCUtils {
     }
 
     static getIv(ivs, statId) {
-        return ivs[statId] || 0;
+        return ivs[this.stat_id_base_conv_table[statId]] || 0;
     }
 
     static getEv(statExp, statId) {
-        return statExp[statId] || 0;
+        return statExp[this.stat_id_base_conv_table[statId]] || 0;
     }
 
     static getStatExpContribution(statExp) {
@@ -293,7 +298,7 @@ export class RSESPUtils extends GSCUtils {
         return null;
     }
 
-    static singleMonToData(mon) {
+    static singleMonToData(mon, isEgg) {
         return mon.getData();
     }
 
@@ -341,6 +346,61 @@ export class RSESPUtils extends GSCUtils {
 }
 
 
+export class RSESPTradingText extends GSCTradingText {
+    getUtilsClass() {
+        return RSESPUtils;
+    }
+
+    // Gen 3 names are zero-filled after their terminator
+    fieldPadding() {
+        return 0;
+    }
+}
+
+/**
+ * The 0x24-byte mail of a Gen 3 Pokémon (no separate sender data).
+ */
+export class RSESPTradingMailData {
+    static MAIL_LEN = 0x24;
+
+    constructor(dataMail = null) {
+        if (dataMail === null) dataMail = [0];
+        if (!Array.isArray(dataMail)) dataMail = Array.from(dataMail);
+        while (dataMail.length < RSESPTradingMailData.MAIL_LEN) dataMail.push(0);
+        this.dataMail = new RSESPTradingText(dataMail, 0, RSESPTradingMailData.MAIL_LEN);
+        this.utilsClass = RSESPUtils;
+    }
+
+    get values() {
+        return this.dataMail.values;
+    }
+
+    getDataMail(isNewMailData = true) {
+        return this.dataMail.values;
+    }
+
+    getDataMailSender() {
+        return null;
+    }
+
+    getMailLanguage() {
+        return null;
+    }
+
+    setMailLanguage(newLanguage) {
+    }
+
+    setDataMail(data) {
+        const values = this.dataMail.values;
+        const maxCopyLen = Math.min(values.length, data.length);
+        for (let i = 0; i < maxCopyLen; i++) values[i] = data[i];
+        if (data.length < values.length) values[data.length] = 0;
+    }
+
+    setDataMailSender(data) {
+    }
+}
+
 // ==================== RSESPTradingPokemonInfo ====================
 
 export class RSESPTradingPokemonInfo {
@@ -351,7 +411,8 @@ export class RSESPTradingPokemonInfo {
     static RIBBON_INFO_LEN = 11;
     static ALL_LENGTHS = [0x64, 0x24, 2, 11];
 
-    static JAPANESE_LANGUAGE_ID = 1;
+    static JAPANESE_LANGUAGE_ID = PokemonNamesForGen.JAPANESE_LANGUAGE;
+    static REFERENCE_GEN = 3;
     static NUM_UNOWN_LETTERS = 28;
     static UNOWN_B_START = 415;
     static UNOWN_SPECIES = 201;
@@ -404,7 +465,7 @@ export class RSESPTradingPokemonInfo {
         }
 
         // Initialize separate sections
-        this.mail = { values: new Uint8Array(RSESPTradingPokemonInfo.MAIL_LEN) };
+        this.mail = new RSESPTradingMailData();
         this.version_info = new Array(RSESPTradingPokemonInfo.VERSION_INFO_LEN).fill(0);
         this.ribbon_info = new Array(RSESPTradingPokemonInfo.RIBBON_INFO_LEN).fill(0);
 
@@ -583,10 +644,16 @@ export class RSESPTradingPokemonInfo {
     setLevel(val) {
         this.values[RSESPTradingPokemonInfo.LEVEL_POS] = val;
         if (RSESPUtils.loaded) {
-            const exp = RSESPUtils.getExpLevel(this.getMonIndex(), val);
+            const exp = RSESPUtils.getExpLevel(this.getSpecies(), val);
             this.setExp(exp);
             this.updateStats();
         }
+    }
+
+    // Defaults to the friendship a traded Pokémon gets
+    setFriendship(val = null) {
+        if (val === null || val === undefined) val = RSESPUtils.base_friendship[this.getSpecies()];
+        this.growth[9] = val;
     }
 
     getCurrHp() { return RSESPUtils.readShort(this.values, RSESPTradingPokemonInfo.CURR_HP_POS); }
@@ -606,7 +673,7 @@ export class RSESPTradingPokemonInfo {
     }
 
     getIsEgg() {
-        return (this.misc[7] & 0x40) !== 0 ? 1 : 0;
+        return (this.misc[7] & 0x40) !== 0;
     }
 
     getHasSecondAbility() {
@@ -677,6 +744,10 @@ export class RSESPTradingPokemonInfo {
         return false;
     }
 
+    getIvs() {
+        return this.getIVs();
+    }
+
     getIVs() {
         const ret = [0, 0, 0, 0, 0, 0];
         const totalVal = RSESPUtils.readInt(this.misc, 4);
@@ -722,19 +793,43 @@ export class RSESPTradingPokemonInfo {
         RSESPUtils.writeShort(this.values, RSESPTradingPokemonInfo.CURR_HP_POS, newCurrHp);
     }
 
-    setEggNickname() {
-        if (RSESPUtils.egg_nick) {
-            this.addNickname(RSESPUtils.egg_nick, 0);
-        }
-        this.values[RSESPTradingPokemonInfo.LANGUAGE_POS] = RSESPTradingPokemonInfo.JAPANESE_LANGUAGE_ID;
-        this.values[RSESPTradingPokemonInfo.USE_EGG_NAME_POS] |= 4;
-        this.misc[7] |= 0x40;
+    getLanguage() {
+        return this.values[RSESPTradingPokemonInfo.LANGUAGE_POS];
     }
 
-    setDefaultNickname() {
-        if (RSESPUtils.pokemon_names) {
-            this.addNickname(RSESPUtils.pokemon_names[this.getSpecies()], 0);
-        }
+    setLanguage(language) {
+        this.values[RSESPTradingPokemonInfo.LANGUAGE_POS] = language;
+    }
+
+    setDefaultTrainerName(language = null) {
+        if (language === null || language === undefined) language = this.getLanguage();
+        this.addOtName(PokemonNamesForGen.getTrainerNameForGen(RSESPTradingPokemonInfo.REFERENCE_GEN, language), 0);
+        this.setLanguage(language);
+    }
+
+    setDefaultNickname(language = null) {
+        if (language === null || language === undefined) language = this.getLanguage();
+        this.addNickname(PokemonNamesForGen.getPokemonNameForGen(this.getSpecies(), RSESPTradingPokemonInfo.REFERENCE_GEN, language), 0);
+        this.setLanguage(language);
+    }
+
+    getNicknameGeneral(language) {
+        const C = RSESPTradingPokemonInfo;
+        return PokemonNamesForGen.convertGenericNameGeneralForGen(pySlice(this.values, C.NICKNAME_POS, C.NICKNAME_POS + C.NICKNAME_LEN), C.REFERENCE_GEN, this.getLanguage());
+    }
+
+    getOtNameGeneral(language) {
+        const C = RSESPTradingPokemonInfo;
+        return PokemonNamesForGen.convertGenericNameGeneralForGen(pySlice(this.values, C.OT_NAME_POS, C.OT_NAME_POS + C.OT_NAME_LEN), C.REFERENCE_GEN, this.getLanguage());
+    }
+
+    // Gen 3 eggs are always named in Japanese
+    setEggNickname(language = null) {
+        const C = RSESPTradingPokemonInfo;
+        this.addNickname(PokemonNamesForGen.getEggNameForGen(C.REFERENCE_GEN, C.JAPANESE_LANGUAGE_ID), 0);
+        this.setLanguage(C.JAPANESE_LANGUAGE_ID);
+        this.values[C.USE_EGG_NAME_POS] |= 4;
+        this.misc[7] |= 0x40;
     }
 
     // ==================== Data sections ====================
@@ -757,11 +852,9 @@ export class RSESPTradingPokemonInfo {
         }
     }
 
-    addMail(data, start) {
-        const len = RSESPTradingPokemonInfo.MAIL_LEN;
-        const src = (data instanceof Uint8Array) ? Array.from(data) : data;
-        while (src.length < start + len) src.push(0);
-        this.mail = { values: src.slice(start, start + len) };
+    addMail(data, start, isNewMailData = true) {
+        if (this.mail === null) this.mail = new RSESPTradingMailData();
+        this.mail.setDataMail(pySlice(data, start, start + RSESPTradingPokemonInfo.MAIL_LEN));
     }
 
     addVersionInfo(data, start) {
@@ -784,7 +877,7 @@ export class RSESPTradingPokemonInfo {
         return !this.isValid;
     }
 
-    isEqual(_other, _weak = false) {
+    isEqual(_other, _weak = false, _allValues = false) {
         return true;
     }
 
@@ -804,10 +897,9 @@ export class RSESPTradingPokemonInfo {
                 data[this._precalced_lengths[0] + i] = this.values[i];
             }
             // Copy mail
-            if (this.mail && this.mail.values) {
-                for (let i = 0; i < this.mail.values.length; i++) {
-                    data[this._precalced_lengths[1] + i] = this.mail.values[i];
-                }
+            const mailData = this.mail.getDataMail();
+            for (let i = 0; i < mailData.length; i++) {
+                data[this._precalced_lengths[1] + i] = mailData[i];
             }
             // Copy version info
             for (let i = 0; i < this.version_info.length; i++) {
@@ -868,12 +960,13 @@ export class RSESPTradingData {
     static TRADING_NAME_LENGTH = 8;
     static TRADING_MAIL_LENGTH = 0x24;
     static TRADING_VERSION_INFO_LENGTH = 2;
+    static REFERENCE_GEN = 3;
 
     constructor(data, dataMail = null, doFull = true) {
         const src = (data instanceof Uint8Array) ? data : new Uint8Array(data);
 
         // Parse trader name
-        this.trader = new GSCTradingText(src, RSESPTradingData.TRADER_NAME_POS, RSESPTradingData.TRADING_NAME_LENGTH);
+        this.trader = new RSESPTradingText(src, RSESPTradingData.TRADER_NAME_POS, RSESPTradingData.TRADING_NAME_LENGTH);
 
         // Parse party info
         this.partyInfo = new RSESPTradingPartyInfo(src, RSESPTradingData.TRADING_PARTY_INFO_POS);
@@ -906,6 +999,21 @@ export class RSESPTradingData {
                 this.pokemon.push(mon);
             }
         }
+        this.language = src[RSESPTradingData.GAME_ID_POS];
+        this.extraVersionFlags = src[RSESPTradingData.GAME_ID_POS + 3];
+    }
+
+    addPartnerName(data) {
+        while (data.length < RSESPTradingData.TRADING_NAME_LENGTH) data.push(0);
+        this.trader.values = pySlice(data, 0);
+    }
+
+    setDefaultPartnerName() {
+        this.addPartnerName(PokemonNamesForGen.getTrainerNameForGen(RSESPTradingData.REFERENCE_GEN, this.language));
+    }
+
+    getPartnerNameGeneral(language) {
+        return PokemonNamesForGen.convertGenericNameGeneralForGen(pySlice(this.trader.values, 0), RSESPTradingData.REFERENCE_GEN, this.language);
     }
 
     getPartySize() {
@@ -975,6 +1083,8 @@ export class RSESPTradingData {
             }
         }
 
+        data[RSESPTradingData.GAME_ID_POS] = this.language;
+        data[RSESPTradingData.GAME_ID_POS + 3] = this.extraVersionFlags;
         RSESPTradingData.generateChecksum(data, lengths);
         return [data];
     }

@@ -9,10 +9,10 @@
  * normalized here into one shape for display.
  */
 
-import { PoolNames } from './PoolNames.js?v=92';
-import { GSCUtils } from './GSCUtils.js?v=92';
-import { RSESPUtils, RSESPTradingPokemonInfo } from './RSESPUtils.js?v=92';
-import { RSESPChecks } from './RSESPChecks.js?v=92';
+import { PoolNames } from './PoolNames.js?v=93';
+import { GSCUtils } from './GSCUtils.js?v=93';
+import { RSESPUtils, RSESPTradingPokemonInfo } from './RSESPUtils.js?v=93';
+import { RSESPChecks } from './RSESPChecks.js?v=93';
 
 export class PoolData {
     static MAGIC = 0x35678292;

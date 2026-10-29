@@ -19,12 +19,27 @@
         </div>
 
         <div class="card">
-            <div class="form-group">
-                <label>Generation:</label>
-                <div class="btn-group" id="gen-select">
-                    <button type="button" class="btn-option" data-value="1">Gen 1</button>
-                    <button type="button" class="btn-option" data-value="2">Gen 2</button>
-                    <button type="button" class="btn-option" data-value="3">Gen 3</button>
+            <div class="game-row">
+                <div class="form-group game-gen">
+                    <label>Generation:</label>
+                    <div class="btn-group" id="gen-select">
+                        <button type="button" class="btn-option" data-value="1">Gen 1</button>
+                        <button type="button" class="btn-option" data-value="2">Gen 2</button>
+                        <button type="button" class="btn-option" data-value="3">Gen 3</button>
+                    </div>
+                </div>
+                <div class="form-group game-language">
+                    <label for="game-language">Game Language:</label>
+                    <select id="game-language">
+                        <option value="auto" hidden disabled>Automatic</option>
+                        <option value="1">🇯🇵 Japanese</option>
+                        <option value="2">🇺🇸 English</option>
+                        <option value="3">🇫🇷 French</option>
+                        <option value="4">🇮🇹 Italian</option>
+                        <option value="5">🇩🇪 German</option>
+                        <option value="6">🇰🇷 Korean</option>
+                        <option value="7">🇪🇸 Spanish</option>
+                    </select>
                 </div>
             </div>
             <div class="form-group" id="trade-type-group" style="display: none;">
@@ -143,28 +158,44 @@
                     <input type="text" id="setting-server-url" class="setting-input-url">
                 </div>
                 <div class="setting-item">
-                    <label for="setting-japanese">Japanese Game:</label>
+                    <label for="setting-profanity-filter">Profanity Filter:</label>
                     <label class="toggle-switch">
-                        <input type="checkbox" id="setting-japanese">
+                        <input type="checkbox" id="setting-profanity-filter" checked>
                         <span class="toggle-slider"></span>
                     </label>
-                    <span class="default-indicator" data-setting="isJapanese"></span>
+                    <span class="default-indicator" data-setting="profanityFilter"></span>
                 </div>
                 <div class="setting-item">
-                    <label for="setting-default-names">Default Names in Trades:</label>
+                    <label for="setting-trade-mon-names">Default Pokémon Names in Trades:</label>
                     <label class="toggle-switch">
-                        <input type="checkbox" id="setting-default-names">
+                        <input type="checkbox" id="setting-trade-mon-names">
                         <span class="toggle-slider"></span>
                     </label>
-                    <span class="default-indicator" data-setting="defaultReceivedNames"></span>
+                    <span class="default-indicator" data-setting="tradeDefaultPokemonNames"></span>
                 </div>
                 <div class="setting-item">
-                    <label for="setting-battle-names">Default Names in Battles:</label>
+                    <label for="setting-trade-trainer-names">Default Trainer Names in Trades:</label>
                     <label class="toggle-switch">
-                        <input type="checkbox" id="setting-battle-names" checked>
+                        <input type="checkbox" id="setting-trade-trainer-names">
                         <span class="toggle-slider"></span>
                     </label>
-                    <span class="default-indicator" data-setting="defaultBattleNames"></span>
+                    <span class="default-indicator" data-setting="tradeDefaultTrainerNames"></span>
+                </div>
+                <div class="setting-item">
+                    <label for="setting-battle-mon-names">Default Pokémon Names in Battles:</label>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="setting-battle-mon-names" checked>
+                        <span class="toggle-slider"></span>
+                    </label>
+                    <span class="default-indicator" data-setting="battleDefaultPokemonNames"></span>
+                </div>
+                <div class="setting-item">
+                    <label for="setting-battle-trainer-names">Default Trainer Names in Battles:</label>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="setting-battle-trainer-names">
+                        <span class="toggle-slider"></span>
+                    </label>
+                    <span class="default-indicator" data-setting="battleDefaultTrainerNames"></span>
                 </div>
                 <div class="setting-item">
                     <label for="setting-sanity-checks">Sanity Checks:</label>
@@ -231,7 +262,7 @@
                     <span class="default-indicator" data-setting="maxLevel"></span>
                 </div>
                 <div class="setting-item">
-                    <label for="setting-convert-eggs">Convert to Eggs (Gen 2 only):</label>
+                    <label for="setting-convert-eggs">Convert to Eggs (Gen 2 and 3):</label>
                     <label class="toggle-switch">
                         <input type="checkbox" id="setting-convert-eggs">
                         <span class="toggle-slider"></span>
@@ -246,7 +277,7 @@
             </div>
         </div>
     </div>
-    <script type="module" src="src/main.js?v=92"></script>
+    <script type="module" src="src/main.js?v=93"></script>
     <script src="src/launcher-return.js"></script>
 </body>
 

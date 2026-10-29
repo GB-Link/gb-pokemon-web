@@ -10,8 +10,12 @@ export class SettingsManager {
     static DEFAULTS = {
         // General Options
         serverUrl: 'wss://pokemon-gb-online-trades.herokuapp.com',
-        isJapanese: false,
-        defaultReceivedNames: false,
+        language: 2,
+        profanityFilter: true,
+        tradeDefaultPokemonNames: false,
+        tradeDefaultTrainerNames: false,
+        battleDefaultPokemonNames: true,
+        battleDefaultTrainerNames: false,
         doSanityChecks: true,
         verbose: false,
         darkMode: true,
@@ -20,7 +24,6 @@ export class SettingsManager {
         isBuffered: false,
         crashOnSyncDrop: true,
         battleTurnTime: 30,
-        defaultBattleNames: true,
 
         // Pool Trade Options
         maxLevel: 100,
@@ -40,7 +43,7 @@ export class SettingsManager {
         try {
             const stored = localStorage.getItem(SettingsManager.STORAGE_KEY);
             if (stored) {
-                const parsed = JSON.parse(stored);
+                const parsed = SettingsManager.migrate(JSON.parse(stored));
                 // Merge with defaults to handle new settings added in updates
                 return { ...SettingsManager.DEFAULTS, ...parsed };
             }
@@ -48,6 +51,25 @@ export class SettingsManager {
             console.warn('Failed to load settings from localStorage:', e);
         }
         return { ...SettingsManager.DEFAULTS };
+    }
+
+    /**
+     * Carry settings saved before the per-language options over to them.
+     */
+    static migrate(stored) {
+        const s = { ...stored };
+        if (s.language === undefined && s.isJapanese !== undefined) s.language = s.isJapanese ? 1 : 2;
+        if (s.defaultReceivedNames !== undefined && s.tradeDefaultPokemonNames === undefined) {
+            s.tradeDefaultPokemonNames = s.defaultReceivedNames;
+            s.tradeDefaultTrainerNames = s.defaultReceivedNames;
+        }
+        if (s.defaultBattleNames !== undefined && s.battleDefaultPokemonNames === undefined) {
+            s.battleDefaultPokemonNames = s.defaultBattleNames;
+        }
+        delete s.isJapanese;
+        delete s.defaultReceivedNames;
+        delete s.defaultBattleNames;
+        return s;
     }
 
     /**

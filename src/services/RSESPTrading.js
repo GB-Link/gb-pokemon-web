@@ -1,7 +1,8 @@
 
-import { TradingProtocol } from './TradingProtocol.js?v=92';
-import { RSESPUtils, RSESPTradingPokemonInfo, RSESPTradingData } from './RSESPUtils.js?v=92';
-import { RSESPChecks } from './RSESPChecks.js?v=92';
+import { TradingProtocol } from './TradingProtocol.js?v=93';
+import { RSESPUtils, RSESPTradingPokemonInfo, RSESPTradingData } from './RSESPUtils.js?v=93';
+import { RSESPChecks } from './RSESPChecks.js?v=93';
+import { PokemonBadWordsFilter } from './TextConversions.js?v=93';
 
 export class RSESPTrading extends TradingProtocol {
     constructor(usb, ws, logger, tradeType = 'pool', isBuffered = false, doSanityChecks = true, options = {}) {
@@ -12,6 +13,12 @@ export class RSESPTrading extends TradingProtocol {
         this.tradeType = tradeType;
         this.maxLevel = options.maxLevel ?? 100;
         this.verbose = options.verbose ?? false;
+        this.language = options.language ?? 2;
+        this.clientType = options.clientType ?? TradingProtocol.CLIENT_TYPE_JS_USB;
+        this.convertToEggs = options.convertToEggs ?? false;
+        this.profanityFilter = options.profanityFilter ?? true;
+        this.defaultPokemonNames = options.defaultPokemonNames ?? false;
+        this.defaultTrainerNames = options.defaultTrainerNames ?? false;
 
         // Gen 3 message tags (matching Python RSESPTradingClient)
         this.full_transfer = "FL3S";
@@ -60,7 +67,8 @@ export class RSESPTrading extends TradingProtocol {
         this.other_id = null;
 
         // Base data file paths
-        this.base_pool_path = "data/rse/base_pool.bin";
+        // Python builds the pool party from base.bin (base_pool.bin is empty)
+        this.base_pool_path = "data/rse/base.bin";
         this.base_no_trade_path = "data/rse/base.bin";
 
         // 32-bit SPI exchange
@@ -95,11 +103,23 @@ export class RSESPTrading extends TradingProtocol {
 
     // ==================== Entry Point ====================
 
+    get MSG_VEC() { return "VEC3"; }
+    get MSG_CLN() { return "CLN3"; }
+    get MSG_LNG() { return null; }
+
+    logRecap() {
+        this.log(`Selected Gen 3, ${this.tradeType === 'pool' ? 'Pool Trade' : '2 Player Trade'}`);
+    }
+
     async startTrade() {
         this.log("Starting Gen 3 Trade...");
 
-        // 4.1 behavior: send the client version immediately
-        this.ws.sendData("VEC3", this.versionData());
+        // Version and client type go out immediately (Gen 3 has no language
+        // exchange)
+        this.ws.sendData(this.MSG_VEC, this.versionData());
+        const type = this.clientType;
+        this.ws.sendData(this.MSG_CLN, new Uint8Array([type & 0xFF, (type >> 8) & 0xFF, (type >> 16) & 0xFF, (type >>> 24) & 0xFF]));
+        this.logRecap();
 
         // Load RSESPUtils data files
         await RSESPUtils.load();
@@ -636,11 +656,29 @@ export class RSESPTrading extends TradingProtocol {
 
     // ==================== Trade Starting Sequence ====================
 
+    preprocessTradingData(data) {
+        if (!data) return data;
+        const isBad = (text) => this.profanityFilter && PokemonBadWordsFilter.isBadWord(text);
+        const other = new RSESPTradingData(data);
+        if (this.defaultTrainerNames || isBad(other.getPartnerNameGeneral(null))) other.setDefaultPartnerName();
+        for (let i = 0; i < other.getPartySize(); i++) {
+            const mon = other.pokemon[i];
+            if (mon.getIsEgg()) {
+                mon.setEggNickname();
+                continue;
+            }
+            if (this.defaultPokemonNames || isBad(mon.getNicknameGeneral(null))) mon.setDefaultNickname();
+            if (this.defaultTrainerNames || isBad(mon.getOtNameGeneral(null))) mon.setDefaultTrainerName();
+        }
+        return other.createTradingData(this.special_sections_len)[0];
+    }
+
     async tradeStartingSequence(sendData) {
         this.checks.resetSpeciesItemList();
+        const processedSendData = this.preprocessTradingData(sendData);
 
         // First read section
-        const [data, data_other] = await this.readSection(sendData);
+        const [data, data_other] = await this.readSection(processedSendData);
         if (this.stopTrade) return;
 
         this.own_pokemon = new RSESPTradingData(data);
@@ -649,7 +687,7 @@ export class RSESPTrading extends TradingProtocol {
         const ourTradingData = this.own_pokemon.createTradingData(this.special_sections_len);
         this.sendBigTradingData(ourTradingData[0]);
 
-        let finalDataOther = data_other;
+        let finalDataOther = processedSendData ?? data_other;
         if (sendData === null || sendData === undefined) {
             // No data to send - need two-pass approach
             // recvDict[FL3S] was already cleared at the end of doTrade,
@@ -673,11 +711,12 @@ export class RSESPTrading extends TradingProtocol {
             if (this.stopTrade) return;
 
             // Second read section with the other's data
-            const [data2, _] = await this.readSection(otherData);
+            const processedOther = this.preprocessTradingData(otherData);
+            const [data2, _] = await this.readSection(processedOther);
             if (this.stopTrade) return;
 
             this.own_pokemon = new RSESPTradingData(data2);
-            finalDataOther = otherData;
+            finalDataOther = processedOther;
         }
 
         this.other_pokemon = new RSESPTradingData(finalDataOther);
@@ -924,6 +963,10 @@ export class RSESPTrading extends TradingProtocol {
         // Add the pool mon
         party.pokemon.push(mon);
         party.partyInfo.total = 1;
+        if (!isEgg && this.convertToEggs) {
+            mon.setHatchingCycles();
+            mon.setEggNickname(this.language);
+        }
 
         // If it's not an egg, set species ID
         // (partyInfo.setId is a no-op for gen3, species is stored in the mon itself)
