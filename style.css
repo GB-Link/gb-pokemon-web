@@ -1186,15 +1186,13 @@ body.light-mode .header-link {
     text-align: left;
 }
 
-#emu-library .emu-game-play:hover,
-#emu-library .icon-btn:hover {
+#emu-library .emu-game-play:hover {
     background: rgba(127, 127, 127, 0.18);
     opacity: 1;
 }
 
 #emu-library .icon-btn {
     flex: none;
-    color: var(--text-color);
 }
 
 #emu-library .icon-btn[hidden] {
@@ -1324,23 +1322,28 @@ body.light-mode .emu-game-unsaved {
     height: 34px;
     padding: 0;
     border-radius: 6px;
-    background: transparent;
-    color: var(--text-color);
-    opacity: 0.8;
+    opacity: 0.9;
 }
 
-.icon-btn:hover {
+#emu-view .icon-btn,
+#emu-library .icon-btn {
+    background: transparent;
+    color: var(--text-color);
+}
+
+#emu-view .icon-btn:hover,
+#emu-library .icon-btn:hover {
     background: rgba(127, 127, 127, 0.18);
     opacity: 1;
 }
 
-.icon-btn[aria-pressed="true"] {
+#emu-view .icon-btn[aria-pressed="true"] {
     color: var(--primary-color);
     opacity: 1;
 }
 
-.icon-btn[aria-pressed="false"] {
-    opacity: 0.55;
+#emu-view .icon-btn[aria-pressed="false"] {
+    opacity: 0.7;
 }
 
 .emu-toolbar button.attention::after {
@@ -1482,8 +1485,18 @@ body.emu-fullscreen #status-card {
 }
 
 body.emu-fullscreen .card-title-row {
-    margin-bottom: 8px;
-    padding-bottom: 6px;
+    justify-content: flex-end;
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+
+body.emu-fullscreen #status-title {
+    display: none;
+}
+
+body.emu-fullscreen .emu-view {
+    margin: 0;
 }
 
 body.emu-fullscreen #status-text {
@@ -1496,6 +1509,11 @@ body.emu-fullscreen #status-text {
 body.emu-fullscreen #status-detail,
 body.emu-fullscreen .emu-toolbar,
 body.emu-fullscreen .emu-keys {
+    display: none;
+}
+
+/* The status line gives its room to the game, unless it reports a problem */
+body.emu-fullscreen .trade-status-row:not(:has(#status-text[data-type="error"])) {
     display: none;
 }
 
@@ -1520,6 +1538,31 @@ body.emu-fullscreen .emu-screen {
 
 body.emu-fullscreen .emu-screen canvas {
     object-fit: contain;
+}
+
+/* Screens wider than the picture, without the touch controls: a column at the top right,
+   beside the picture, which stays centred */
+@media (min-aspect-ratio: 5/4) {
+    @media not all and (pointer: coarse) {
+        body.emu-fullscreen .card-title-row {
+            position: absolute;
+            top: 8px;
+            right: 10px;
+            z-index: 2;
+        }
+
+        body.emu-fullscreen .emu-view {
+            flex-direction: column;
+        }
+
+        body.emu-fullscreen .emulator-panel {
+            margin: 0 38px;
+        }
+
+        body.emu-fullscreen .trade-status-row {
+            margin-right: 38px;
+        }
+    }
 }
 
 body.emu-fullscreen .negotiation-card {
@@ -1559,6 +1602,19 @@ body.emu-fullscreen .negotiation-card {
 @media (pointer: coarse) and (orientation: landscape) {
     body.emu-fullscreen .emulator-panel {
         --emu-side: clamp(150px, 22vw, 200px);
+        margin-top: 0;
+    }
+
+    /* The buttons in a row at the top of the right-hand column */
+    body.emu-fullscreen .card-title-row {
+        position: absolute;
+        top: 8px;
+        right: 14px;
+        z-index: 2;
+    }
+
+    body.emu-fullscreen .trade-status-row {
+        margin-right: 120px;
     }
 
     body.emu-fullscreen .emu-screen {
