@@ -19,10 +19,10 @@ const AUDIO_TARGET_SECONDS = 0.07;
 
 export class GameBoyEmulator {
     static async create(moduleOptions = {}) {
-        const { default: createGbEmu } = await import('../../emulator/mgba-gb.js?v=98');
+        const { default: createGbEmu } = await import('../../emulator/mgba-gb.js?v=100');
         const options = { ...moduleOptions };
         if (!options.locateFile && typeof window !== 'undefined') {
-            options.locateFile = (path) => new URL(`../../emulator/${path}?v=98`, import.meta.url).href;
+            options.locateFile = (path) => new URL(`../../emulator/${path}?v=100`, import.meta.url).href;
         }
         return new GameBoyEmulator(await createGbEmu(options));
     }
@@ -48,6 +48,8 @@ export class GameBoyEmulator {
         this._audio = null;
         this._volume = 1;
         this._onVisibility = () => this._schedule();
+        this._linkPaced = false;
+        this._linkStepping = false;
         this.onResize = null;
     }
 
@@ -148,6 +150,29 @@ export class GameBoyEmulator {
         const { byte, resolve } = this._linkQueue.shift();
         this._linkWaiter = resolve;
         this.m._emu_link_send(byte);
+        if (this._linkPaced) this._stepForLink();
+    }
+
+    /**
+     * Link-paced: the clock runs no frames by itself and each exchange runs the frames
+     * its transfer needs. While a synchronous data exchange waits on the network the
+     * game is then frozen, so its own link timeouts can't run out.
+     */
+    setLinkPaced(on) {
+        this._linkPaced = !!on;
+        this._nextFrameAt = performance.now();
+        if (this._linkPaced) this._stepForLink();
+    }
+
+    _stepForLink() {
+        if (this._linkStepping) return;
+        this._linkStepping = true;
+        try {
+            // The glue answers within a frame or two; the guard only stops a runaway
+            for (let i = 0; i < 600 && this._linkWaiter && this.running && this._linkPaced; i++) this.step();
+        } finally {
+            this._linkStepping = false;
+        }
     }
 
     _abortLink() {
@@ -222,7 +247,9 @@ export class GameBoyEmulator {
 
     _tick() {
         if (!this.running) return;
-        if (!this._audioClock()) {
+        if (this._linkPaced) {
+            this._nextFrameAt = performance.now();
+        } else if (!this._audioClock()) {
             const now = performance.now();
             let due = Math.floor((now - this._nextFrameAt) / FRAME_MS) + 1;
             if (due > MAX_CATCH_UP_FRAMES) {
@@ -285,7 +312,7 @@ export class GameBoyEmulator {
         this._audio = { ctx, gain, node: null, ready: false, pushed: 0, taken: 0, scratch: new Float32Array(8192) };
         this.m._emu_set_sample_rate(ctx.sampleRate);
         try {
-            await ctx.audioWorklet.addModule(new URL('./audio-worklet.js?v=98', import.meta.url));
+            await ctx.audioWorklet.addModule(new URL('./audio-worklet.js?v=100', import.meta.url));
             const node = new AudioWorkletNode(ctx, 'gb-audio', { outputChannelCount: [2] });
             node.port.onmessage = (e) => this._onAudioTaken(e.data);
             node.connect(gain);
@@ -303,7 +330,7 @@ export class GameBoyEmulator {
     }
 
     _onAudioTaken(taken) {
-        if (!this.running || !this._audioClock()) return;
+        if (!this.running || !this._audioClock() || this._linkPaced) return;
         const a = this._audio;
         a.taken = Math.max(a.taken, taken);
         const target = a.ctx.sampleRate * AUDIO_TARGET_SECONDS;

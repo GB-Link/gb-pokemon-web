@@ -19,6 +19,11 @@ export class EmulatorConnection {
         return true;
     }
 
+    /** During a synchronous data exchange the game only runs when a byte is exchanged. */
+    setLinkPaced(on) {
+        this.emulator.setLinkPaced(on);
+    }
+
     async disconnect() {
         this.isConnected = false;
         this._generation++;

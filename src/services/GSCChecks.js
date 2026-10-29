@@ -8,8 +8,8 @@
  * Call `await GSCChecks.load()` (or `await checks.load()`) once; after that
  * new instances are ready as soon as they are constructed.
  */
-import { GSCUtils, GSCUtilsLoaders, GSCUtilsMisc, pyIndex, pyLen, pySlice } from './GSCUtils.js?v=98';
-import { PokemonNamesForGen, PokemonTextConversions, PokemonBadWordsFilter } from './TextConversions.js?v=98';
+import { GSCUtils, GSCUtilsLoaders, GSCUtilsMisc, pyIndex, pyLen, pySlice } from './GSCUtils.js?v=100';
+import { PokemonNamesForGen, PokemonTextConversions, PokemonBadWordsFilter } from './TextConversions.js?v=100';
 
 const DATA_FILES = {
     badIdsItems: 'bad_ids_items.bin',
@@ -53,6 +53,7 @@ export class GSCChecks {
     static FREE_VALUE_MOVES = 0x00;
     static NO_CONVERSION_PATCH = 0x00;
     static END_OF_PATCH = 0xFF;
+    static FE_STAND_IN = 0xFF;
     static PATCH_SET_COVER = 0xFC;
     static TRAINER_NAME_ID = 0x5D; // "TRAINER" - Korean has no such character
     static TACKLE_ID = 0x21;
@@ -292,11 +293,13 @@ export class GSCChecks {
         this.currSpecies = 0;
         this.level = this.utilsClass.MAX_LEVEL;
         this.iv = [0, 0, 0, 0];
+        this.ivLow = [0, 0, 0, 0];
         this.statExp = [0, 0, 0, 0, 0];
         this.moves = [0, 0, 0, 0];
         this.currMove = 0;
         this.currPp = 0;
         this.exp = 0;
+        this.expLow = 0;
         this.expRange = [0, 0];
         this.negativeExp = false;
         this.currExpPos = 0;
@@ -434,9 +437,12 @@ export class GSCChecks {
         return this.sanity(val, () => val);
     }
 
+    /** The level that goes with the experience (either level when a stand-in byte leaves it open). */
     cleanLevel(level) {
         return this.sanity(level, () => {
-            this.level = this.utilsClass.getLevelExp(this.currSpecies, this.exp);
+            const highest = this.utilsClass.getLevelExp(this.currSpecies, this.exp);
+            const lowest = this.utilsClass.getLevelExp(this.currSpecies, this.expLow);
+            this.level = level >= lowest && level <= highest ? level : highest;
             return this.level;
         });
     }
@@ -456,6 +462,9 @@ export class GSCChecks {
             const currReadVal = val << (8 * (2 - this.currExpPos));
             const expMask = pyIndex(GSCChecks.CURR_EXP_POS_MASKS, this.currExpPos);
             this.exp = this.checkRange(this.expRange, (this.exp & expMask) | currReadVal);
+            // The lowest experience the bytes can mean, every stand-in read as 0xFE
+            const lowReadVal = (val === GSCChecks.FE_STAND_IN ? 0xFE : val) << (8 * (2 - this.currExpPos));
+            this.expLow = this.checkRange(this.expRange, (this.expLow & expMask) | lowReadVal);
             val = (this.exp >> (8 * (2 - this.currExpPos))) & 0xFF;
             this.currExpPos += 1;
             return val;
@@ -510,11 +519,13 @@ export class GSCChecks {
             this.currSpeciesPos += 1;
             this.currStatId = 0;
             this.iv = [0, 0, 0, 0];
+            this.ivLow = [0, 0, 0, 0];
             this.statExp = [0, 0, 0, 0, 0];
             this.moves = [0, 0, 0, 0];
             this.currMove = 0;
             this.currPp = 0;
             this.exp = 0;
+            this.expLow = 0;
             this.negativeExp = false;
             this.currExpPos = 0;
             this.currHp = 0;
@@ -572,6 +583,9 @@ export class GSCChecks {
             const calcVal = GSCUtilsMisc.readNybbles(val);
             GSCUtilsMisc.setItem(this.iv, this.currIvPos * 2, calcVal[0]);
             GSCUtilsMisc.setItem(this.iv, (this.currIvPos * 2) + 1, calcVal[1]);
+            // A stand-in byte may be 0xFE: its second IV is 14 or 15 (and the HP IV follows)
+            GSCUtilsMisc.setItem(this.ivLow, this.currIvPos * 2, calcVal[0]);
+            GSCUtilsMisc.setItem(this.ivLow, (this.currIvPos * 2) + 1, val === GSCChecks.FE_STAND_IN ? calcVal[1] - 1 : calcVal[1]);
             this.currIvPos += 1;
             return val;
         });
@@ -927,7 +941,7 @@ export class GSCChecks {
             const U = this.utilsClass;
             if (this.currPos === 0) {
                 this.stat = 0;
-                let minStat = U.statCalculation(this.currStatId, this.currSpecies, this.iv, this.statExp, this.level, false);
+                let minStat = U.statCalculation(this.currStatId, this.currSpecies, this.ivLow, this.statExp, this.level, false);
                 let maxStat = U.statCalculation(this.currStatId, this.currSpecies, this.iv, this.statExp, this.level);
                 if (zeroMin || zeroMax) minStat = 0;
                 if (zeroMax) maxStat = 0;

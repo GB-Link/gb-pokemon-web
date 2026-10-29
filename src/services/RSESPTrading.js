@@ -1,8 +1,8 @@
 
-import { TradingProtocol } from './TradingProtocol.js?v=98';
-import { RSESPUtils, RSESPTradingPokemonInfo, RSESPTradingData } from './RSESPUtils.js?v=98';
-import { RSESPChecks } from './RSESPChecks.js?v=98';
-import { PokemonBadWordsFilter } from './TextConversions.js?v=98';
+import { TradingProtocol } from './TradingProtocol.js?v=100';
+import { RSESPUtils, RSESPTradingPokemonInfo, RSESPTradingData } from './RSESPUtils.js?v=100';
+import { RSESPChecks } from './RSESPChecks.js?v=100';
+import { PokemonBadWordsFilter } from './TextConversions.js?v=100';
 
 export class RSESPTrading extends TradingProtocol {
     constructor(usb, ws, logger, tradeType = 'pool', isBuffered = false, doSanityChecks = true, options = {}) {

@@ -1,18 +1,18 @@
 
-import { UsbConnection, CMD, MODE } from '../services/UsbConnection.js?v=98';
-import { SerialConnection } from '../services/SerialConnection.js?v=98';
-import { BgbConnection } from '../services/BgbConnection.js?v=98';
-import { EmulatorConnection } from '../services/EmulatorConnection.js?v=98';
-import { WebSocketClient } from '../services/WebSocketClient.js?v=98';
-import { RBYTrading } from '../services/RBYTrading.js?v=98';
-import { GSCTrading } from '../services/GSCTrading.js?v=98';
-import { GSCTradingKOR } from '../services/GSCTradingKOR.js?v=98';
-import { TradingProtocol } from '../services/TradingProtocol.js?v=98';
-import { RBYBattling } from '../services/RBYBattling.js?v=98';
-import { GSCBattling } from '../services/GSCBattling.js?v=98';
-import { SettingsManager } from '../services/SettingsManager.js?v=98';
-import { multiboot } from '../services/Multiboot.js?v=98';
-import { RSESPTrading } from '../services/RSESPTrading.js?v=98';
+import { UsbConnection, CMD, MODE } from '../services/UsbConnection.js?v=100';
+import { SerialConnection } from '../services/SerialConnection.js?v=100';
+import { BgbConnection } from '../services/BgbConnection.js?v=100';
+import { EmulatorConnection } from '../services/EmulatorConnection.js?v=100';
+import { WebSocketClient } from '../services/WebSocketClient.js?v=100';
+import { RBYTrading } from '../services/RBYTrading.js?v=100';
+import { GSCTrading } from '../services/GSCTrading.js?v=100';
+import { GSCTradingKOR } from '../services/GSCTradingKOR.js?v=100';
+import { TradingProtocol } from '../services/TradingProtocol.js?v=100';
+import { RBYBattling } from '../services/RBYBattling.js?v=100';
+import { GSCBattling } from '../services/GSCBattling.js?v=100';
+import { SettingsManager } from '../services/SettingsManager.js?v=100';
+import { multiboot } from '../services/Multiboot.js?v=100';
+import { RSESPTrading } from '../services/RSESPTrading.js?v=100';
 
 export class AppUI {
     constructor() {
@@ -626,7 +626,7 @@ export class AppUI {
         btn.disabled = true;
         try {
             if (!this.emulatorPanel) {
-                const { EmulatorPanel } = await import('./EmulatorPanel.js?v=98');
+                const { EmulatorPanel } = await import('./EmulatorPanel.js?v=100');
                 const $ = (id) => document.getElementById(id);
                 this.emulatorPanel = new EmulatorPanel({
                     panel: $('emulator-panel'), screen: $('emu-screen'), canvas: $('emu-canvas'), loader: $('emu-loader'),

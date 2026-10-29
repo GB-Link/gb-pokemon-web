@@ -1,9 +1,9 @@
 
-import { TradingProtocol } from './TradingProtocol.js?v=98';
-import { GSCUtils } from './GSCUtils.js?v=98';
-import { GSCChecks } from './GSCChecks.js?v=98';
-import { GSCJPMailConverter } from './GSCJPMailConverter.js?v=98';
-import { GSCTradingData } from './GSCTradingDataUtils.js?v=98';
+import { TradingProtocol } from './TradingProtocol.js?v=100';
+import { GSCUtils } from './GSCUtils.js?v=100';
+import { GSCChecks } from './GSCChecks.js?v=100';
+import { GSCJPMailConverter } from './GSCJPMailConverter.js?v=100';
+import { GSCTradingData } from './GSCTradingDataUtils.js?v=100';
 
 export class GSCTrading extends TradingProtocol {
     static JAPANESE_LANGUAGE = 1;
@@ -48,6 +48,9 @@ export class GSCTrading extends TradingProtocol {
         this.isLinkTrade = (tradeType === 'link');
 
 
+        this.ROOM_NAME = 'Trade Center';
+        this.SESSION_KIND = 'trade';
+        this.OTHER_ROOMS = { 0xD2: 'Colosseum' };
         this.ENTER_ROOM_STATES = [
             [0x01, 0x61, 0xD1, 0x00, 0xFE],
             [
@@ -142,6 +145,7 @@ export class GSCTrading extends TradingProtocol {
         this.ownPartyHasMail = false;
         this.peerPartyHasMail = false;
         this.peerPartyData = null;  // Store peer's party data from sync exchange
+        this.peerRawSections = [];
 
         // Mail item IDs (0x9E-0xA8 are mail items in GSC)
         // From ids_mail.bin: mail items are in range 0x9E to 0xA8
@@ -1365,6 +1369,8 @@ export class GSCTrading extends TradingProtocol {
     }
 
     static BASE_MAIL_INDEX = 3;
+    // How long a link-paced sync exchange waits for the other player's next byte
+    static SYNC_PEER_SILENCE_MS = 30000;
     static MAIL_STARTER = 0x20;
     static MAIL_STARTER_KOREAN = 0x52;
     static MAIL_MESSAGE_SIZE_INT = 0x21;
@@ -3119,8 +3125,10 @@ export class GSCTrading extends TradingProtocol {
         let minIndex = 0;
         for (let i = 0; i < this.TOTAL_SEND_BUF_NEW_BYTES; i++) {
             if (buf[i][0] < buf[minIndex][0]) minIndex = i;
-            buf[minIndex] = buf[last];
         }
+        // Only the oldest entry makes room for the marker: the rest still carry the end of the
+        // last section to a player who missed it (Python's copy inside its loop drops more of them)
+        buf[minIndex] = buf[last];
         buf[last] = [0xFFFF, 0xFF, index, false, 0];
         this.syncSeedBuf = buf;
         return buf;
@@ -3272,6 +3280,9 @@ export class GSCTrading extends TradingProtocol {
             const checker = this.getSectionChecker(index, false);
             const WAIT_POLL_MS = 4; // poll cadence while waiting on network data
             const MAX_MS_BETWEEN_TRANSFERS = 800; // Python max_seconds_between_transfers
+            // A link-paced (emulated) game is frozen while we wait, so it needs no keep-alive
+            // transfers; only a long silence from the other player ends the exchange
+            const linkPaced = !!this.usb.setLinkPaced;
             let posSend = 1;   // next position for our GB's bytes (0 = firstByte)
             let posRecv = 0;   // contiguous peer bytes buffered into otherBuf
             let iFeed = 0;     // next peer byte to feed the GB
@@ -3305,7 +3316,15 @@ export class GSCTrading extends TradingProtocol {
 
                 let byteToConsole = this.NO_INPUT;
                 let schedule = false;
-                if (Date.now() - lastTransfer >= MAX_MS_BETWEEN_TRANSFERS) schedule = true;
+                if (linkPaced) {
+                    if (Date.now() - lastTransfer >= GSCTrading.SYNC_PEER_SILENCE_MS) {
+                        this.log(`[ERROR] Section ${index}: the other player stopped sending data. Aborting trade.`);
+                        this.stopTrade = true;
+                        throw new Error(`Section ${index} starved (fed ${iFeed}/${length})`);
+                    }
+                } else if (Date.now() - lastTransfer >= MAX_MS_BETWEEN_TRANSFERS) {
+                    schedule = true;
+                }
                 if (bytesOffset < bytesOffsetTarget) {
                     schedule = true;
                 } else if (otherBuf.length > iFeed) {
@@ -3558,6 +3577,8 @@ export class GSCTrading extends TradingProtocol {
         }
 
         this.log(`Sync Exchange Section ${index}: Complete`);
+        // The other player's bytes as they arrived, before the checks (explains a failed battle check)
+        this.peerRawSections[index] = Uint8Array.from({ length }, (_, i) => (recvData[i] ?? 0) & 0xFF);
         return [buf, otherBuf];
     }
 
@@ -3644,6 +3665,14 @@ export class GSCTrading extends TradingProtocol {
     }
 
     async readSection(index, dataToSend, skipSync = false) {
+        try {
+            return await this.readSectionInner(index, dataToSend, skipSync);
+        } finally {
+            this.usb.setLinkPaced?.(false);
+        }
+    }
+
+    async readSectionInner(index, dataToSend, skipSync) {
         // A sequence keeps calling this after an aborted section; checks must not run on what was never read
         if (this.stopTrade) throw new Error('Trade stopped');
         // Python reads the random section, mail without any, and every pool or
@@ -3685,6 +3714,8 @@ export class GSCTrading extends TradingProtocol {
 
 
         if (useSyncForSection) {
+            // An emulated game only runs as the bytes flow: waiting on the network can't time it out
+            this.usb.setLinkPaced?.(true);
             await this.synchSynchSection(index);
             if (this.stopTrade) throw new Error('Trade stopped');
         }

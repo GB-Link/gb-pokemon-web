@@ -3,8 +3,8 @@
  * being decrypted (RSESPTradingPokemonInfo); this mainly carries the
  * language and the sanity checks switch.
  */
-import { GSCChecks } from './GSCChecks.js?v=98';
-import { RSESPUtils } from './RSESPUtils.js?v=98';
+import { GSCChecks } from './GSCChecks.js?v=100';
+import { RSESPUtils } from './RSESPUtils.js?v=100';
 
 export class RSESPChecks extends GSCChecks {
     static BASE_FOLDER = '/data/rse/';

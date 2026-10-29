@@ -81,6 +81,12 @@ export class TradingProtocol {
                 recv = this.failedRead(e, ++readFailures);
             }
 
+            if (await this.turnAwayOtherRoom(recv)) {
+                stateIndex = 0;
+                this.resetRoomSync();
+                continue;
+            }
+
             const heldIndex = this.holdRoomSync(this.ENTER_ROOM_STATES, stateIndex, recv);
             if (heldIndex !== stateIndex || stateIndex > lastState) {
                 if (heldIndex !== stateIndex) this.logVerbose(`Room byte repeated, back to state ${heldIndex}`);
@@ -127,6 +133,29 @@ export class TradingProtocol {
 
         if (this.stopTrade) return false;
         this.log("Entered Room!");
+        return true;
+    }
+
+    /**
+     * Gen 2 games send the room they chose (0xD1 Trade Center, 0xD2 Colosseum) and wait
+     * for their partner's. A game in the other room gets our room byte back: it then says
+     * the rooms don't match and lets the player out, instead of waiting at "Please wait"
+     * for a room byte that never comes. True when the game was turned away.
+     */
+    async turnAwayOtherRoom(recv) {
+        const chosen = this.OTHER_ROOMS?.[recv];
+        if (!chosen) return false;
+        this.log(`Your game went to the ${chosen}, but this is a ${this.SESSION_KIND}: talk to the ${this.ROOM_NAME} receptionist.`);
+        this.onStatus?.(`Wrong room: this is a ${this.SESSION_KIND}`, 'error',
+            `Your game went to the ${chosen}. Once it says the rooms don't match, talk to the ${this.ROOM_NAME} receptionist.`);
+        const ours = this.ENTER_ROOM_STATES[0][2];
+        let quiet = 0;
+        const end = Date.now() + 15000;
+        while (quiet < 60 && Date.now() < end && !this.stopTrade) {
+            const back = await this.exchangeByte(ours);
+            quiet = (back & 0xF0) === 0xD0 ? 0 : quiet + 1;
+            await this.sleep(5);
+        }
         return true;
     }
 

@@ -3,7 +3,7 @@
  * battery save, so they can be played again later. Nothing leaves the device.
  * Every call fails soft: private windows and blocked storage just keep nothing.
  */
-import { identifyRom } from './RomInfo.js?v=98';
+import { identifyRom } from './RomInfo.js?v=100';
 
 const DB_NAME = 'gblink-emulator';
 const DB_VERSION = 2;

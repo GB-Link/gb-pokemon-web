@@ -1,8 +1,8 @@
-import { GameBoyEmulator } from '../emulator/GameBoyEmulator.js?v=98';
-import { EmulatorInput } from '../emulator/EmulatorInput.js?v=98';
-import { GameStore, gameId } from '../emulator/GameStore.js?v=98';
-import { withLocalClock } from '../emulator/GameClock.js?v=98';
-import { identifyRom, gameTitle } from '../emulator/RomInfo.js?v=98';
+import { GameBoyEmulator } from '../emulator/GameBoyEmulator.js?v=100';
+import { EmulatorInput } from '../emulator/EmulatorInput.js?v=100';
+import { GameStore, gameId } from '../emulator/GameStore.js?v=100';
+import { withLocalClock } from '../emulator/GameClock.js?v=100';
+import { identifyRom, gameTitle } from '../emulator/RomInfo.js?v=100';
 
 const ROM_EXT = /\.(gb|gbc|sgb)$/i;
 const SAVE_EXT = /\.(sav|srm)$/i;

@@ -2,9 +2,9 @@
  * GSCTradingDataUtils - Text, mail and party structures of the Gen 2
  * trading data.
  */
-import { GSCUtils, GSCUtilsMisc, pyIndex, pySlice } from './GSCUtils.js?v=98';
-import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=98';
-import { PokemonNamesForGen, PokemonTextConversions } from './TextConversions.js?v=98';
+import { GSCUtils, GSCUtilsMisc, pyIndex, pySlice } from './GSCUtils.js?v=100';
+import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=100';
+import { PokemonNamesForGen, PokemonTextConversions } from './TextConversions.js?v=100';
 
 /**
  * A text entry (name, mail message...) of the trading data.

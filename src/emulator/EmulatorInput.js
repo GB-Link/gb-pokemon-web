@@ -1,4 +1,4 @@
-import { GB_KEYS } from './GameBoyEmulator.js?v=98';
+import { GB_KEYS } from './GameBoyEmulator.js?v=100';
 
 const KEYBOARD = {
     ArrowUp: GB_KEYS.UP, ArrowDown: GB_KEYS.DOWN, ArrowLeft: GB_KEYS.LEFT, ArrowRight: GB_KEYS.RIGHT,

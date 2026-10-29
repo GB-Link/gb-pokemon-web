@@ -52,7 +52,7 @@ Ported to Web by Starlark for easier access and wider device support.
 
 ### Battles (Gen 1 & Gen 2)
 - Select your generation, pick **Battle**, and share a room code with the other player (they can use this web client or the Python CLI).
-- Go to the Cable Club and enter the **Colosseum** (not the Trade Center).
+- Go to the Cable Club and enter the **Colosseum** (not the Trade Center). If your Gen 2 game goes to the wrong room, it says the rooms don't match and lets you out, and the status tells you which receptionist to talk to.
 - Notes ported from the Python client:
     - **Gen 2** waits between turns (default 30 s, changeable in Settings, skippable with the "Start turn now" button) because the inputs of the two games must stay in lockstep; very short waits (a second or two) can leave a game frozen at "Waiting...!". Beat Up is known to be risky.
     - **Gen 1** has no wait, but Counter, Mirror Move, Psywave, Fly, Dig and Mimic can desync the battle, and turn order can look odd.

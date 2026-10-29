@@ -12,10 +12,10 @@
  * identical seed) so the two games' battle RNGs stay in lockstep.
  */
 
-import { GSCTrading } from './GSCTrading.js?v=98';
-import { GSCUtils } from './GSCUtils.js?v=98';
-import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=98';
-import { GSCTradingData } from './GSCTradingDataUtils.js?v=98';
+import { GSCTrading } from './GSCTrading.js?v=100';
+import { GSCUtils } from './GSCUtils.js?v=100';
+import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=100';
+import { GSCTradingData } from './GSCTradingDataUtils.js?v=100';
 
 export class GSCBattling extends GSCTrading {
     constructor(usb, ws, logger, tradeType = 'battle', isBuffered = false, doSanityChecks = true, options = {}) {
@@ -26,6 +26,9 @@ export class GSCBattling extends GSCTrading {
 
         // ==================== BATTLE STATE MACHINES ====================
         // Colosseum room entry (0xD2 = fighting, vs 0xD1 trading)
+        this.ROOM_NAME = 'Colosseum';
+        this.SESSION_KIND = 'battle';
+        this.OTHER_ROOMS = { 0xD1: 'Trade Center' };
         this.ENTER_ROOM_STATES = [
             [0x01, 0x61, 0xD2, 0x00, 0xFE],
             [new Set([0x61]), new Set([0xD2]), new Set([0x00]), new Set([0xFE]), new Set([0xFE])]
@@ -209,6 +212,11 @@ export class GSCBattling extends GSCTrading {
         this.resetRoomSync();
         while ((sending <= lastState || (roomSync && !this.roomSyncSettled())) && !this.stopTrade) {
             const recv = await this.exchangeByte(statesList[0][Math.min(sending, lastState)]);
+            if (roomSync && await this.turnAwayOtherRoom(recv)) {
+                sending = 0;
+                this.resetRoomSync();
+                continue;
+            }
             if (roomSync) {
                 const held = this.holdRoomSync(statesList, sending, recv);
                 if (held !== sending || sending > lastState) {
@@ -552,6 +560,44 @@ export class GSCBattling extends GSCTrading {
             }
         }
         return true;
+    }
+
+    // Party Pokémon fields for the mismatch report: name, offset, length, shown as hex bytes
+    static MON_FIELDS = [['species', 0, 1], ['held item', 1, 1], ['moves', 2, 4, true], ['OT ID', 6, 2, true],
+        ['experience', 8, 3], ['stat experience', 11, 10, true], ['DVs', 21, 2, true], ['PP', 23, 4, true],
+        ['happiness', 27, 1], ['Pokérus', 28, 1, true], ['caught data', 29, 2, true], ['level', 31, 1],
+        ['status', 32, 1, true], ['HP', 34, 2], ['max HP', 36, 2], ['Attack', 38, 2], ['Defense', 40, 2],
+        ['Speed', 42, 2], ['Sp. Atk', 44, 2], ['Sp. Def', 46, 2]];
+
+    explainBattleDataMismatch(otherFull) {
+        const rngEcho = otherFull[0];
+        if (!this.lastRandom || rngEcho.length !== this.lastRandom.length || rngEcho.some((v, i) => v !== this.lastRandom[i])) {
+            return ['The two games got different battle seeds.'];
+        }
+        const decode = (party, patches) => {
+            const data = new Uint8Array(party);
+            this.utilsClass.applyPatches(data, patches, false);
+            return this.createPartyReader(data);
+        };
+        const sent = decode(otherFull[1], otherFull[2]);
+        const raw = this.peerRawSections?.[1] && this.peerRawSections?.[2] ? decode(this.peerRawSections[1], this.peerRawSections[2]) : null;
+        const got = this.otherPokemon;
+        const show = (values, start, len, hex) => {
+            const bytes = Array.from(values).slice(start, start + len);
+            return hex ? bytes.map((b) => b.toString(16).padStart(2, '0')).join(' ') : String(bytes.reduce((n, b) => (n * 256) + b, 0));
+        };
+        const lines = [];
+        if (sent.getPartySize() !== got.getPartySize()) lines.push(`Their party has ${sent.getPartySize()} Pokémon; ${got.getPartySize()} arrived.`);
+        for (let i = 0; i < Math.min(sent.getPartySize(), got.getPartySize()); i++) {
+            const theirs = sent.pokemon[i].values, ours = got.pokemon[i].values;
+            for (const [name, start, len, hex] of GSCBattling.MON_FIELDS) {
+                const a = show(theirs, start, len, hex), b = show(ours, start, len, hex);
+                if (a === b) continue;
+                const how = raw && show(raw.pokemon[i].values, start, len, hex) !== a ? 'it arrived different over the link' : "this page's checks changed it";
+                lines.push(`Their Pokémon ${i + 1} (species ${theirs[0]}): ${name} is ${a} in their game but ${b} here (${how}).`);
+            }
+        }
+        return lines.slice(0, 6);
     }
 
     // ==================== CHOICE HELPERS ====================
@@ -1093,6 +1139,7 @@ export class GSCBattling extends GSCTrading {
                     if (!otherFull) break;
                     if (!this.verifyBattleData(otherFull)) {
                         this.log("[ERROR] ERROR WITH OTHER PLAYER'S DATA! SOMETHING CHANGED! ABORTING BATTLE!");
+                        for (const line of this.explainBattleDataMismatch(otherFull)) this.log(line);
                         if (!this.isBuffered) {
                             this.log("If this keeps happening, try enabling Buffered mode.");
                         }
