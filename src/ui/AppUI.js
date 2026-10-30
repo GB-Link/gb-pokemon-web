@@ -1,18 +1,18 @@
 
-import { UsbConnection, CMD, MODE } from '../services/UsbConnection.js?v=100';
-import { SerialConnection } from '../services/SerialConnection.js?v=100';
-import { BgbConnection } from '../services/BgbConnection.js?v=100';
-import { EmulatorConnection } from '../services/EmulatorConnection.js?v=100';
-import { WebSocketClient } from '../services/WebSocketClient.js?v=100';
-import { RBYTrading } from '../services/RBYTrading.js?v=100';
-import { GSCTrading } from '../services/GSCTrading.js?v=100';
-import { GSCTradingKOR } from '../services/GSCTradingKOR.js?v=100';
-import { TradingProtocol } from '../services/TradingProtocol.js?v=100';
-import { RBYBattling } from '../services/RBYBattling.js?v=100';
-import { GSCBattling } from '../services/GSCBattling.js?v=100';
-import { SettingsManager } from '../services/SettingsManager.js?v=100';
-import { multiboot } from '../services/Multiboot.js?v=100';
-import { RSESPTrading } from '../services/RSESPTrading.js?v=100';
+import { UsbConnection, CMD, MODE } from '../services/UsbConnection.js?v=102';
+import { SerialConnection } from '../services/SerialConnection.js?v=102';
+import { BgbConnection } from '../services/BgbConnection.js?v=102';
+import { EmulatorConnection } from '../services/EmulatorConnection.js?v=102';
+import { WebSocketClient } from '../services/WebSocketClient.js?v=102';
+import { RBYTrading } from '../services/RBYTrading.js?v=102';
+import { GSCTrading } from '../services/GSCTrading.js?v=102';
+import { GSCTradingKOR } from '../services/GSCTradingKOR.js?v=102';
+import { TradingProtocol } from '../services/TradingProtocol.js?v=102';
+import { RBYBattling } from '../services/RBYBattling.js?v=102';
+import { GSCBattling } from '../services/GSCBattling.js?v=102';
+import { SettingsManager } from '../services/SettingsManager.js?v=102';
+import { multiboot } from '../services/Multiboot.js?v=102';
+import { RSESPTrading } from '../services/RSESPTrading.js?v=102';
 
 export class AppUI {
     constructor() {
@@ -71,6 +71,9 @@ export class AppUI {
             battleWaitCard: document.getElementById('battle-wait-card'),
             battleWaitText: document.getElementById('battle-wait-text'),
             btnBattleSkipWait: document.getElementById('btn-battle-skip-wait'),
+            btnEmuTurn: document.getElementById('btn-emu-turn'),
+            emuTurnSecs: document.getElementById('emu-turn-secs'),
+            emuTurnLeft: document.getElementById('emu-turn-left'),
             settingMaxLevel: document.getElementById('setting-max-level'),
             settingMaxLevelSlider: document.getElementById('setting-max-level-slider'),
             settingConvertEggs: document.getElementById('setting-convert-eggs'),
@@ -144,7 +147,9 @@ export class AppUI {
             btn.addEventListener('click', () => this.onTradeTypeSelect(btn));
         });
 
-        this.elements.btnBattleSkipWait.addEventListener('click', () => this.protocol?.skipTurnWait?.());
+        for (const btn of [this.elements.btnBattleSkipWait, this.elements.btnEmuTurn]) {
+            btn.addEventListener('click', () => this.protocol?.skipTurnWait?.());
+        }
 
         this.elements.btnSettings.addEventListener('click', () => this.openSettings());
         this.elements.btnCloseSettings.addEventListener('click', () => this.closeSettings());
@@ -481,17 +486,24 @@ export class AppUI {
 
     showBattleWait(seconds) {
         this.hideBattleWait();
-        let remaining = Math.ceil(seconds);
-        this.elements.battleWaitText.textContent =
-            `Waiting ${remaining}s before checking for the next input…`;
-        this.elements.battleWaitCard.style.display = 'block';
+        const total = Math.max(1, Math.ceil(seconds));
+        let remaining = total;
+        this._renderBattleWait(remaining, total);
+        // The card shows on the page; in fullscreen a countdown button joins the view buttons, so the picture keeps its size
+        this.elements.battleWaitCard.hidden = false;
+        this.elements.btnEmuTurn.hidden = false;
         this._battleWaitInterval = setInterval(() => {
             remaining -= 1;
-            if (remaining > 0) {
-                this.elements.battleWaitText.textContent =
-                    `Waiting ${remaining}s before checking for the next input…`;
-            }
+            if (remaining > 0) this._renderBattleWait(remaining, total);
         }, 1000);
+    }
+
+    _renderBattleWait(remaining, total) {
+        this.elements.battleWaitText.textContent =
+            `Waiting ${remaining}s before checking for the next input…`;
+        this.elements.emuTurnSecs.textContent = remaining;
+        this.elements.emuTurnLeft.style.strokeDashoffset = 100 * (1 - remaining / total);
+        this.elements.btnEmuTurn.setAttribute('aria-label', `Start turn now (next turn in ${remaining}s)`);
     }
 
     hideBattleWait() {
@@ -499,7 +511,8 @@ export class AppUI {
             clearInterval(this._battleWaitInterval);
             this._battleWaitInterval = null;
         }
-        this.elements.battleWaitCard.style.display = 'none';
+        this.elements.battleWaitCard.hidden = true;
+        this.elements.btnEmuTurn.hidden = true;
     }
 
     // === Connection ===
@@ -626,7 +639,7 @@ export class AppUI {
         btn.disabled = true;
         try {
             if (!this.emulatorPanel) {
-                const { EmulatorPanel } = await import('./EmulatorPanel.js?v=100');
+                const { EmulatorPanel } = await import('./EmulatorPanel.js?v=102');
                 const $ = (id) => document.getElementById(id);
                 this.emulatorPanel = new EmulatorPanel({
                     panel: $('emulator-panel'), screen: $('emu-screen'), canvas: $('emu-canvas'), loader: $('emu-loader'),
@@ -847,6 +860,8 @@ export class AppUI {
             const names = protocol.SECTION_NAMES || [];
             this.setProgress(names[sectionIndex] || `Section ${sectionIndex}`, done, total);
         };
+        // The data sections are through once the trade menu or the battle starts
+        protocol.onExchangeDone = () => this.hideProgress();
         if (tradeType === 'battle') {
             protocol.onTurnWait = (seconds) => this.showBattleWait(seconds);
             protocol.onTurnWaitEnd = () => this.hideBattleWait();

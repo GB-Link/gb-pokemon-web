@@ -19,10 +19,10 @@ const AUDIO_TARGET_SECONDS = 0.07;
 
 export class GameBoyEmulator {
     static async create(moduleOptions = {}) {
-        const { default: createGbEmu } = await import('../../emulator/mgba-gb.js?v=100');
+        const { default: createGbEmu } = await import('../../emulator/mgba-gb.js?v=102');
         const options = { ...moduleOptions };
         if (!options.locateFile && typeof window !== 'undefined') {
-            options.locateFile = (path) => new URL(`../../emulator/${path}?v=100`, import.meta.url).href;
+            options.locateFile = (path) => new URL(`../../emulator/${path}?v=102`, import.meta.url).href;
         }
         return new GameBoyEmulator(await createGbEmu(options));
     }
@@ -312,7 +312,7 @@ export class GameBoyEmulator {
         this._audio = { ctx, gain, node: null, ready: false, pushed: 0, taken: 0, scratch: new Float32Array(8192) };
         this.m._emu_set_sample_rate(ctx.sampleRate);
         try {
-            await ctx.audioWorklet.addModule(new URL('./audio-worklet.js?v=100', import.meta.url));
+            await ctx.audioWorklet.addModule(new URL('./audio-worklet.js?v=102', import.meta.url));
             const node = new AudioWorkletNode(ctx, 'gb-audio', { outputChannelCount: [2] });
             node.port.onmessage = (e) => this._onAudioTaken(e.data);
             node.connect(gain);

@@ -1,9 +1,9 @@
 
-import { TradingProtocol } from './TradingProtocol.js?v=100';
-import { GSCUtils } from './GSCUtils.js?v=100';
-import { GSCChecks } from './GSCChecks.js?v=100';
-import { GSCJPMailConverter } from './GSCJPMailConverter.js?v=100';
-import { GSCTradingData } from './GSCTradingDataUtils.js?v=100';
+import { TradingProtocol } from './TradingProtocol.js?v=102';
+import { GSCUtils } from './GSCUtils.js?v=102';
+import { GSCChecks } from './GSCChecks.js?v=102';
+import { GSCJPMailConverter } from './GSCJPMailConverter.js?v=102';
+import { GSCTradingData } from './GSCTradingDataUtils.js?v=102';
 
 export class GSCTrading extends TradingProtocol {
     static JAPANESE_LANGUAGE = 1;
@@ -1057,6 +1057,7 @@ export class GSCTrading extends TradingProtocol {
     }
 
     async tradeMenuLoop() {
+        this.onExchangeDone?.();
         // Trade menu flow:
         // 1. Wait for GB to send a valid choice (0x70-0x7F range)
         // 2. Confirm the choice (send NO_INPUT repeatedly until stable)
@@ -1721,6 +1722,7 @@ export class GSCTrading extends TradingProtocol {
      * Both players send/receive CHC2, ACP2, SUC2 via the proxy server.
      */
     async linkTradeMenuLoop() {
+        this.onExchangeDone?.();
         const FIRST_TRADE_INDEX = 0x70;
         const STOP_TRADE = 0x7F;
         const ACCEPT_TRADE = 0x72;

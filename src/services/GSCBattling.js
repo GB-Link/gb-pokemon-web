@@ -12,10 +12,10 @@
  * identical seed) so the two games' battle RNGs stay in lockstep.
  */
 
-import { GSCTrading } from './GSCTrading.js?v=100';
-import { GSCUtils } from './GSCUtils.js?v=100';
-import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=100';
-import { GSCTradingData } from './GSCTradingDataUtils.js?v=100';
+import { GSCTrading } from './GSCTrading.js?v=102';
+import { GSCUtils } from './GSCUtils.js?v=102';
+import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=102';
+import { GSCTradingData } from './GSCTradingDataUtils.js?v=102';
 
 export class GSCBattling extends GSCTrading {
     constructor(usb, ws, logger, tradeType = 'battle', isBuffered = false, doSanityChecks = true, options = {}) {
@@ -913,6 +913,7 @@ export class GSCBattling extends GSCTrading {
      * (2-player path).
      */
     async doBattle(close = false) {
+        this.onExchangeDone?.();
         this.initialSitPosition = 0;
         let battleCompleted = false;
         this.currOwnMonIndex = 0;

@@ -2,9 +2,9 @@
  * GSCPokemonInfo - One Pokémon of the Gen 2 trading data: the 0x30-byte
  * struct plus its OT name, nickname and (when holding mail) mail data.
  */
-import { GSCUtils, GSCUtilsMisc, pyIndex, pySlice } from './GSCUtils.js?v=100';
-import { GSCTradingText, GSCTradingMailData } from './GSCTradingDataUtils.js?v=100';
-import { PokemonNamesForGen } from './TextConversions.js?v=100';
+import { GSCUtils, GSCUtilsMisc, pyIndex, pySlice } from './GSCUtils.js?v=102';
+import { GSCTradingText, GSCTradingMailData } from './GSCTradingDataUtils.js?v=102';
+import { PokemonNamesForGen } from './TextConversions.js?v=102';
 
 export class GSCPokemonInfo {
     static POKEMON_DATA_LEN = 0x30;

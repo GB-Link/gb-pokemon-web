@@ -9,9 +9,9 @@
  * - No eggs, no mail
  */
 
-import { GSCTrading } from './GSCTrading.js?v=100';
-import { RBYUtils } from './RBYUtils.js?v=100';
-import { RBYTradingData, RBYChecks } from './RBYTradingDataUtils.js?v=100';
+import { GSCTrading } from './GSCTrading.js?v=102';
+import { RBYUtils } from './RBYUtils.js?v=102';
+import { RBYTradingData, RBYChecks } from './RBYTradingDataUtils.js?v=102';
 
 export class RBYTrading extends GSCTrading {
     constructor(usb, ws, logger, tradeType = 'pool', isBuffered = false, doSanityChecks = true, options = {}) {
@@ -822,6 +822,7 @@ export class RBYTrading extends GSCTrading {
      * Trade menu loop - RBY version with different byte values
      */
     async tradeMenuLoop() {
+        this.onExchangeDone?.();
         this.log("RBY Trade Menu Loop starting...");
 
         const POSSIBLE_INDEXES = this.POSSIBLE_INDEXES;

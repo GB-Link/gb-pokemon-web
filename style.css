@@ -1346,6 +1346,59 @@ body.light-mode .emu-game-unsaved {
     opacity: 0.7;
 }
 
+/* Battle turn countdown: only in fullscreen, where the page's turn-wait card is hidden */
+#emu-view .turn-btn {
+    display: none;
+    width: auto;
+    min-width: 34px;
+    gap: 6px;
+    padding: 0 3px;
+    font-size: 14px;
+    font-weight: 600;
+    opacity: 1;
+}
+
+body.emu-fullscreen #emu-view .turn-btn:not([hidden]) {
+    display: inline-flex;
+}
+
+.turn-label {
+    padding-left: 6px;
+    white-space: nowrap;
+}
+
+.turn-timer {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+.turn-timer svg {
+    position: absolute;
+    inset: 0;
+    transform: rotate(-90deg);
+}
+
+.turn-timer circle {
+    fill: none;
+    stroke-width: 3.5;
+}
+
+.turn-track {
+    stroke: rgba(127, 127, 127, 0.35);
+}
+
+.turn-left {
+    stroke: var(--success-color);
+    stroke-dasharray: 100;
+    transition: stroke-dashoffset 1s linear;
+}
+
 .emu-toolbar button.attention::after {
     content: '';
     display: inline-block;
@@ -1512,8 +1565,17 @@ body.emu-fullscreen .emu-keys {
     display: none;
 }
 
+/* Coming and going, the progress bar would resize the picture */
+body.emu-fullscreen #progress-wrap {
+    display: none;
+}
+
 /* The status line gives its room to the game, unless it reports a problem */
 body.emu-fullscreen .trade-status-row:not(:has(#status-text[data-type="error"])) {
+    display: none;
+}
+
+body.emu-fullscreen #battle-wait-card {
     display: none;
 }
 
@@ -1553,6 +1615,15 @@ body.emu-fullscreen .emu-screen canvas {
 
         body.emu-fullscreen .emu-view {
             flex-direction: column;
+        }
+
+        body.emu-fullscreen .turn-label {
+            display: none;
+        }
+
+        /* Last in the column, so the buttons above it stay put */
+        body.emu-fullscreen #emu-view .turn-btn {
+            order: 1;
         }
 
         body.emu-fullscreen .emulator-panel {
@@ -1615,6 +1686,10 @@ body.emu-fullscreen .negotiation-card {
 
     body.emu-fullscreen .trade-status-row {
         margin-right: 120px;
+    }
+
+    body.emu-fullscreen .turn-label {
+        display: none;
     }
 
     body.emu-fullscreen .emu-screen {

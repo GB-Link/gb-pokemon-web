@@ -95,7 +95,7 @@
         </div>
 
         <!-- Battle Turn Wait -->
-        <div id="battle-wait-card" class="card negotiation-card" style="display: none;">
+        <div id="battle-wait-card" class="card negotiation-card" hidden>
             <h2>Battle Turn Wait</h2>
             <p id="battle-wait-text">Waiting before checking for the next input…</p>
             <p>Only press "Start turn now" once your game shows "Waiting...!" — skipping while an animation is still playing can desync the battle.</p>
@@ -108,6 +108,13 @@
             <div class="card-title-row">
                 <h2 id="status-title">Status</h2>
                 <div id="emu-view" class="emu-view" hidden>
+                    <button id="btn-emu-turn" type="button" class="icon-btn turn-btn" title="Start turn now. Only once your game shows &quot;Waiting...!&quot;" hidden>
+                        <span class="turn-label">Start turn</span>
+                        <span class="turn-timer">
+                            <svg viewBox="0 0 36 36" aria-hidden="true"><circle class="turn-track" cx="18" cy="18" r="15.9155"/><circle id="emu-turn-left" class="turn-left" cx="18" cy="18" r="15.9155"/></svg>
+                            <span id="emu-turn-secs"></span>
+                        </span>
+                    </button>
                     <button id="btn-emu-sound" type="button" class="icon-btn"></button>
                     <button id="btn-emu-border" type="button" class="icon-btn" hidden></button>
                     <button id="btn-emu-fullscreen" type="button" class="icon-btn"></button>
@@ -330,7 +337,7 @@
             </div>
         </div>
     </div>
-    <script type="module" src="src/main.js?v=100"></script>
+    <script type="module" src="src/main.js?v=102"></script>
     <script src="src/launcher-return.js"></script>
 </body>
 

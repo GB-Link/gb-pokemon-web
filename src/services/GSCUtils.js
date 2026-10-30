@@ -1,6 +1,6 @@
-import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=100';
-import { GSCChecks } from './GSCChecks.js?v=100';
-import { PokemonNamesForGen, PokemonTextConversions } from './TextConversions.js?v=100';
+import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=102';
+import { GSCChecks } from './GSCChecks.js?v=102';
+import { PokemonNamesForGen, PokemonTextConversions } from './TextConversions.js?v=102';
 
 // Python list indexing: negative indexes count from the end, anything else
 // out of range throws.
