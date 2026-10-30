@@ -10,7 +10,7 @@
  * national number the sprite CDN uses.
  */
 
-import { DefaultNames } from './DefaultNames.js?v=102';
+import { DefaultNames } from './DefaultNames.js?v=103';
 
 export class PoolNames {
     static BASE_FOLDER = '/data/names/';

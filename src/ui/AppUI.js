@@ -1,18 +1,17 @@
 
-import { UsbConnection, CMD, MODE } from '../services/UsbConnection.js?v=102';
-import { SerialConnection } from '../services/SerialConnection.js?v=102';
-import { BgbConnection } from '../services/BgbConnection.js?v=102';
-import { EmulatorConnection } from '../services/EmulatorConnection.js?v=102';
-import { WebSocketClient } from '../services/WebSocketClient.js?v=102';
-import { RBYTrading } from '../services/RBYTrading.js?v=102';
-import { GSCTrading } from '../services/GSCTrading.js?v=102';
-import { GSCTradingKOR } from '../services/GSCTradingKOR.js?v=102';
-import { TradingProtocol } from '../services/TradingProtocol.js?v=102';
-import { RBYBattling } from '../services/RBYBattling.js?v=102';
-import { GSCBattling } from '../services/GSCBattling.js?v=102';
-import { SettingsManager } from '../services/SettingsManager.js?v=102';
-import { multiboot } from '../services/Multiboot.js?v=102';
-import { RSESPTrading } from '../services/RSESPTrading.js?v=102';
+import { UsbConnection, CMD, MODE } from '../services/UsbConnection.js?v=103';
+import { SerialConnection } from '../services/SerialConnection.js?v=103';
+import { EmulatorConnection } from '../services/EmulatorConnection.js?v=103';
+import { WebSocketClient } from '../services/WebSocketClient.js?v=103';
+import { RBYTrading } from '../services/RBYTrading.js?v=103';
+import { GSCTrading } from '../services/GSCTrading.js?v=103';
+import { GSCTradingKOR } from '../services/GSCTradingKOR.js?v=103';
+import { TradingProtocol } from '../services/TradingProtocol.js?v=103';
+import { RBYBattling } from '../services/RBYBattling.js?v=103';
+import { GSCBattling } from '../services/GSCBattling.js?v=103';
+import { SettingsManager } from '../services/SettingsManager.js?v=103';
+import { multiboot } from '../services/Multiboot.js?v=103';
+import { RSESPTrading } from '../services/RSESPTrading.js?v=103';
 
 export class AppUI {
     constructor() {
@@ -76,19 +75,14 @@ export class AppUI {
             emuTurnLeft: document.getElementById('emu-turn-left'),
             settingMaxLevel: document.getElementById('setting-max-level'),
             settingMaxLevelSlider: document.getElementById('setting-max-level-slider'),
-            settingConvertEggs: document.getElementById('setting-convert-eggs'),
-            bgbOptions: document.getElementById('bgb-options'),
-            bgbTarget: document.getElementById('bgb-target'),
-            bgbListen: document.getElementById('bgb-listen')
+            settingConvertEggs: document.getElementById('setting-convert-eggs')
         };
 
         // Auto-select transport: prefer WebUSB, fall back to WebSerial (Firefox 151+,
         // or Chromium with WebUSB disabled). When WebUSB is available, never use serial.
-        // ?from=gblink-bgb switches to the BGB emulator bridge instead (desktop app).
-        this.bgbMode = new URLSearchParams(window.location.search).get('from') === 'gblink-bgb';
         const hasUsb = ('usb' in navigator);
         const hasSerial = ('serial' in navigator);
-        this.transport = this.bgbMode ? 'bgb' : (hasUsb ? 'usb' : (hasSerial ? 'serial' : null));
+        this.transport = hasUsb ? 'usb' : (hasSerial ? 'serial' : null);
 
         this.selectedGen = null;
         this.selectedTradeType = 'link';
@@ -96,37 +90,15 @@ export class AppUI {
         this.isTradeActive = false;
 
         this.attachListeners();
-        this.applyBgbMode();
         this.loadSettingsToUI();
         this.applyTheme();
-    }
-
-    applyBgbMode() {
-        if (!this.bgbMode) return;
-        this.elements.btnConnectEmulator.hidden = true;
-        // BGB emulates GB/GBC only — no Gen 3 (GBA) and no multiboot.
-        const gen3Btn = this.elements.genSelectGroup.querySelector('[data-value="3"]');
-        if (gen3Btn) gen3Btn.style.display = 'none';
-        if (window.gblinkBGB && window.gblinkBGB.version >= 1) {
-            this.elements.bgbOptions.style.display = 'flex';
-            const savedTarget = localStorage.getItem('gblink.bgbTarget');
-            if (savedTarget) this.elements.bgbTarget.value = savedTarget;
-            this.elements.bgbListen.checked = localStorage.getItem('gblink.bgbListen') === '1';
-            this.setStatus('BGB mode — start BGB with your ROM, set Link > Listen, then click Connect BGB', 'active');
-        } else {
-            this.elements.btnConnectUsb.disabled = true;
-            this.elements.btnConnectUsb.textContent = 'GB-Link app required';
-            this.setStatus('BGB play requires the GB-Link desktop app', 'error',
-                'Get it at gblink.io/bgb, then open this page from inside the app.');
-        }
     }
 
     attachListeners() {
         // Single auto-selecting connect button. Label and target transport depend on
         // what the browser supports; serial is only used when WebUSB is unavailable.
         if (this.transport) {
-            this.elements.btnConnectUsb.textContent =
-                { bgb: 'Connect BGB', serial: 'Connect Serial', usb: 'Connect USB' }[this.transport];
+            this.elements.btnConnectUsb.textContent = this.transport === 'serial' ? 'Connect Serial' : 'Connect USB';
             this.elements.btnConnectUsb.addEventListener('click', () => this.connect(this.transport));
         } else {
             this.elements.btnConnectUsb.disabled = true;
@@ -286,7 +258,6 @@ export class AppUI {
     };
 
     onGenSelect(btn) {
-        if (this.bgbMode && btn.dataset.value === '3') return;
         this.elements.genSelectGroup.querySelectorAll('.btn-option').forEach(b => b.classList.remove('selected'));
         btn.classList.add('selected');
         this.selectedGen = btn.dataset.value;
@@ -556,35 +527,20 @@ export class AppUI {
                 try { await this.usb.disconnect(); } catch (_) {}
             }
             this.connectionKind = kind;
-            this.usb = kind === 'bgb' ? new BgbConnection(this._readBgbTarget())
-                : kind === 'serial' ? new SerialConnection() : new UsbConnection();
+            this.usb = kind === 'serial' ? new SerialConnection() : new UsbConnection();
 
-            this.log(kind === 'bgb' ? 'Connecting to BGB emulator...'
-                : `Requesting ${kind === 'serial' ? 'serial port' : 'USB device'}...`);
+            this.log(`Requesting ${kind === 'serial' ? 'serial port' : 'USB device'}...`);
             await this.usb.connect();
-            if (kind === 'bgb') this.usb.onLinkLost = (message) => this.onTransportLost(message);
             this.elements.usbStatus.textContent = `Connected (${kind})`;
             this.elements.usbStatus.className = 'status connected';
             // Disable the connect button once a transport is open
             this.elements.btnConnectUsb.disabled = true;
-            this.setStatus(kind === 'bgb'
-                ? 'BGB connected — pick a generation and press Start'
-                : 'Adapter connected — pick a generation and press Start', 'success');
+            this.setStatus('Adapter connected — pick a generation and press Start', 'success');
             this.checkReady();
         } catch (error) {
             this.log(`${kind} connection failed: ${error}`);
-            this.setStatus(kind === 'bgb' ? 'BGB connection failed' : 'Adapter connection failed', 'error',
-                error && error.message ? error.message : '');
+            this.setStatus('Adapter connection failed', 'error', error && error.message ? error.message : '');
         }
-    }
-
-    onTransportLost(message) {
-        this.elements.usbStatus.textContent = 'Disconnected';
-        this.elements.usbStatus.className = 'status disconnected';
-        this.elements.btnConnectUsb.disabled = false;
-        this.setStatus('BGB disconnected', 'error',
-            `${message}. Set BGB to Link > Listen again, then click Connect BGB.`);
-        this.log(`BGB disconnected: ${message}`);
     }
 
     /**
@@ -597,27 +553,8 @@ export class AppUI {
             profanityFilter: this.settings.get('profanityFilter'),
             defaultPokemonNames: this.settings.get(isBattle ? 'battleDefaultPokemonNames' : 'tradeDefaultPokemonNames'),
             defaultTrainerNames: this.settings.get(isBattle ? 'battleDefaultTrainerNames' : 'tradeDefaultTrainerNames'),
-            clientType: { bgb: TradingProtocol.CLIENT_TYPE_JS_EMU_BGB, emulator: TradingProtocol.CLIENT_TYPE_JS_EMU_WEB }[this.connectionKind]
-                ?? TradingProtocol.CLIENT_TYPE_JS_USB,
+            clientType: this.connectionKind === 'emulator' ? TradingProtocol.CLIENT_TYPE_JS_EMU_WEB : TradingProtocol.CLIENT_TYPE_JS_USB,
         };
-    }
-
-    _readBgbTarget() {
-        const raw = (this.elements.bgbTarget.value || '').trim() || '127.0.0.1:8765';
-        const listen = this.elements.bgbListen.checked;
-        localStorage.setItem('gblink.bgbTarget', raw);
-        localStorage.setItem('gblink.bgbListen', listen ? '1' : '0');
-        let host = '127.0.0.1';
-        let port = 8765;
-        const sep = raw.lastIndexOf(':');
-        if (sep === -1) {
-            if (/^\d+$/.test(raw)) port = parseInt(raw, 10);
-            else host = raw;
-        } else {
-            host = raw.slice(0, sep) || '127.0.0.1';
-            port = parseInt(raw.slice(sep + 1), 10) || 8765;
-        }
-        return listen ? { mode: 'listen', port } : { mode: 'connect', host, port };
     }
 
     // Back-compat shim — old callers may still invoke connectUsb()
@@ -639,7 +576,7 @@ export class AppUI {
         btn.disabled = true;
         try {
             if (!this.emulatorPanel) {
-                const { EmulatorPanel } = await import('./EmulatorPanel.js?v=102');
+                const { EmulatorPanel } = await import('./EmulatorPanel.js?v=103');
                 const $ = (id) => document.getElementById(id);
                 this.emulatorPanel = new EmulatorPanel({
                     panel: $('emulator-panel'), screen: $('emu-screen'), canvas: $('emu-canvas'), loader: $('emu-loader'),
@@ -717,10 +654,8 @@ export class AppUI {
 
     async startTrade() {
         if (this.isTradeActive) { await this.stopTrade(); return; }
-        // WebUSB doesn't track isConnected; BGB and serial report a lost link here
         if (!this.usb || this.usb.isConnected === false) {
-            this.setStatus(this.transport === 'bgb' ? 'BGB is not connected' : 'Adapter is not connected', 'error',
-                this.transport === 'bgb' ? 'Click Connect BGB first.' : 'Connect your adapter first.');
+            this.setStatus('Adapter is not connected', 'error', 'Connect your adapter first.');
             return;
         }
         if (this.connectionKind === 'emulator') {

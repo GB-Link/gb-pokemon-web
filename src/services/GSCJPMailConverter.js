@@ -9,9 +9,9 @@
  * new GSCJPMailConverter(): the 0x21-byte layout (0x181 section), with a
  * plain byte-for-byte conversion.
  */
-import { GSCUtils, GSCUtilsLoaders, GSCUtilsMisc, pyIndex, pySlice } from './GSCUtils.js?v=102';
-import { GSCTradingMailData } from './GSCTradingDataUtils.js?v=102';
-import { PokemonNamesForGen } from './TextConversions.js?v=102';
+import { GSCUtils, GSCUtilsLoaders, GSCUtilsMisc, pyIndex, pySlice } from './GSCUtils.js?v=103';
+import { GSCTradingMailData } from './GSCTradingDataUtils.js?v=103';
+import { PokemonNamesForGen } from './TextConversions.js?v=103';
 
 const DATA_FILES = {
     toJp: 'mail_conversion_table_en_to_jp.bin',

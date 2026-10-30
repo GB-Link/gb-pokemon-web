@@ -6,9 +6,8 @@ export class EmulatorConnection {
         this.emulator = emulator;
         this.isConnected = false;
         this.isNewFirmware = true;
-        // Same pacing as BGB: a busy game answers "not ready"
+        // A busy game answers "not ready", so battle choices are polled no faster than this
         this.minBattlePollMs = 50;
-        this.onLinkLost = null;
         this._frameQueue = [];
         this._frameWaiters = [];
         this._generation = 0;

@@ -8,10 +8,10 @@
  * ghost party gets healed, and the battle-end probe waits for 0xFD.
  */
 
-import { GSCBattling } from './GSCBattling.js?v=102';
-import { GSCTrading } from './GSCTrading.js?v=102';
-import { RBYUtils } from './RBYUtils.js?v=102';
-import { RBYTradingData, RBYChecks } from './RBYTradingDataUtils.js?v=102';
+import { GSCBattling } from './GSCBattling.js?v=103';
+import { GSCTrading } from './GSCTrading.js?v=103';
+import { RBYUtils } from './RBYUtils.js?v=103';
+import { RBYTradingData, RBYChecks } from './RBYTradingDataUtils.js?v=103';
 
 export class RBYBattling extends GSCBattling {
     constructor(usb, ws, logger, tradeType = 'battle', isBuffered = false, doSanityChecks = true, options = {}) {

@@ -12,10 +12,10 @@
  * identical seed) so the two games' battle RNGs stay in lockstep.
  */
 
-import { GSCTrading } from './GSCTrading.js?v=102';
-import { GSCUtils } from './GSCUtils.js?v=102';
-import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=102';
-import { GSCTradingData } from './GSCTradingDataUtils.js?v=102';
+import { GSCTrading } from './GSCTrading.js?v=103';
+import { GSCUtils } from './GSCUtils.js?v=103';
+import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=103';
+import { GSCTradingData } from './GSCTradingDataUtils.js?v=103';
 
 export class GSCBattling extends GSCTrading {
     constructor(usb, ws, logger, tradeType = 'battle', isBuffered = false, doSanityChecks = true, options = {}) {
@@ -721,7 +721,7 @@ export class GSCBattling extends GSCTrading {
      * A value only counts once it repeats for threshold consecutive reads.
      * threshold 0 accepts the first hit (including 0x00 when breakOnNoData).
      */
-    // Choice polling pace: a transport can ask for slower polling (BGB reports a busy game as no data)
+    // Choice polling pace: a transport can ask for slower polling (the emulator reports a busy game as no data)
     get battlePollMs() {
         return Math.max(20, this.usb?.minBattlePollMs ?? 0);
     }
@@ -746,7 +746,7 @@ export class GSCBattling extends GSCTrading {
                     runStart = Date.now();
                 }
                 if (specialMode) consecutiveReads = threshold;
-                // BGB reports a briefly busy game as no data: a stop also needs a lasting silence
+                // The emulator reports a briefly busy game as no data: a stop also needs a lasting silence
                 else if (next === this.NO_DATA && consecutiveReads >= threshold
                     && Date.now() - runStart < this.NO_DATA_STOP_MS) consecutiveReads = threshold - 1;
             } else {

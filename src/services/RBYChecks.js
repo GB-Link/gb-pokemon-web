@@ -1,8 +1,8 @@
 /**
  * RBYChecks - Sanity checks and cleaning of received Gen 1 trading data.
  */
-import { GSCChecks } from './GSCChecks.js?v=102';
-import { RBYUtils } from './RBYUtils.js?v=102';
+import { GSCChecks } from './GSCChecks.js?v=103';
+import { RBYUtils } from './RBYUtils.js?v=103';
 
 export class RBYChecks extends GSCChecks {
     static BASE_FOLDER = '/data/rby/';

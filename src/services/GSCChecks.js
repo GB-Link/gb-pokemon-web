@@ -8,8 +8,8 @@
  * Call `await GSCChecks.load()` (or `await checks.load()`) once; after that
  * new instances are ready as soon as they are constructed.
  */
-import { GSCUtils, GSCUtilsLoaders, GSCUtilsMisc, pyIndex, pyLen, pySlice } from './GSCUtils.js?v=102';
-import { PokemonNamesForGen, PokemonTextConversions, PokemonBadWordsFilter } from './TextConversions.js?v=102';
+import { GSCUtils, GSCUtilsLoaders, GSCUtilsMisc, pyIndex, pyLen, pySlice } from './GSCUtils.js?v=103';
+import { PokemonNamesForGen, PokemonTextConversions, PokemonBadWordsFilter } from './TextConversions.js?v=103';
 
 const DATA_FILES = {
     badIdsItems: 'bad_ids_items.bin',

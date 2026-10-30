@@ -27,7 +27,6 @@ export class TradingProtocol {
     }
 
     static CLIENT_TYPE_JS_USB = 4;
-    static CLIENT_TYPE_JS_EMU_BGB = 5;
     static CLIENT_TYPE_JS_EMU_WEB = 6;
 
     // TradingVersion 5.0.1 (little-endian 16-bit major/minor/build)

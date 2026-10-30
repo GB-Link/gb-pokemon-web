@@ -3,9 +3,9 @@
  * a detail panel for the selected Pokemon.
  */
 
-import { PoolData } from '../services/PoolData.js?v=102';
-import { PoolNames } from '../services/PoolNames.js?v=102';
-import { SettingsManager } from '../services/SettingsManager.js?v=102';
+import { PoolData } from '../services/PoolData.js?v=103';
+import { PoolNames } from '../services/PoolNames.js?v=103';
+import { SettingsManager } from '../services/SettingsManager.js?v=103';
 
 export class PoolUI {
     constructor() {

@@ -1,6 +1,6 @@
 /* Game Boy emulator for the web client: mGBA's GB core, driven one frame at a
  * time from JavaScript, with the link port exposed as a clock-master byte
- * exchange (the same model as the GB-Link adapter and the BGB transport). */
+ * exchange (the same model as the GB-Link adapter). */
 #include <emscripten.h>
 #include <stdlib.h>
 #include <string.h>
@@ -121,7 +121,7 @@ static uint8_t _linkWriteSC(struct GBSIODriver* driver, uint8_t value) {
 			l->result = LINK_NOT_READY;
 		}
 	} else if (GBRegisterSCIsShiftClock(value)) {
-		// The game drives the clock: nobody answers, like the BGB transport
+		// The game drives the clock: nobody answers, the game reads 0x00
 		l->d.p->pendingSB = 0x00;
 	} else if (l->pending >= 0 && !l->transferring) {
 		_linkStart(l);
