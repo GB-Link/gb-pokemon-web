@@ -52,7 +52,7 @@ export class SerialConnection {
                 throw new Error('WebSerial is not supported. Use Firefox 151+, Chrome, or Edge.');
             }
             this.port = await navigator.serial.requestPort({
-                filters: [{ usbVendorId: 0x2FE3 }]
+                filters: [{ usbVendorId: 0x2FE3 }, { usbVendorId: 0x1209, usbProductId: 0xB011 }]
             });
             await this.port.open({ baudRate: 115200 });
 
