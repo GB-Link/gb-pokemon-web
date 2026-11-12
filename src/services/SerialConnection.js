@@ -14,7 +14,8 @@
  *     sync 'GB'   0=cmd,1=data,2=status
  */
 
-import { CMD, MODE } from './UsbConnection.js?v=103';
+import { CMD, MODE } from './UsbConnection.js?v=104';
+import { GbLinkPassive } from './GbLinkPassive.js?v=104';
 export { CMD, MODE };
 
 const SYNC_0 = 0x47; // 'G'
@@ -31,6 +32,8 @@ export class SerialConnection {
         this.writer = null;
         this.isConnected = false;
         this.isNewFirmware = true;
+        // Firmware 3.0 and newer: the Game Boy can drive the clock and play Player 1
+        this.passiveLink = null;
 
         this._dataQueue = [];
         this._dataWaiters = [];
@@ -55,6 +58,9 @@ export class SerialConnection {
                 filters: [{ usbVendorId: 0x2FE3 }, { usbVendorId: 0x1209, usbProductId: 0xB011 }]
             });
             await this.port.open({ baudRate: 115200 });
+            const info = this.port.getInfo();
+            const isFirmware3 = info.usbVendorId === 0x1209 && info.usbProductId === 0xB011;
+            this.passiveLink = isFirmware3 ? new GbLinkPassive(this) : null;
 
             this.writer = this.port.writable.getWriter();
             this.reader = this.port.readable.getReader();
@@ -72,6 +78,7 @@ export class SerialConnection {
 
     async disconnect() {
         this.isConnected = false;
+        this.passiveLink = null;
         try {
             if (this.reader) {
                 try { await this.reader.cancel(); } catch (_) {}

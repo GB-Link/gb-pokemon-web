@@ -1,9 +1,9 @@
 
-import { TradingProtocol } from './TradingProtocol.js?v=103';
-import { GSCUtils } from './GSCUtils.js?v=103';
-import { GSCChecks } from './GSCChecks.js?v=103';
-import { GSCJPMailConverter } from './GSCJPMailConverter.js?v=103';
-import { GSCTradingData } from './GSCTradingDataUtils.js?v=103';
+import { TradingProtocol } from './TradingProtocol.js?v=104';
+import { GSCUtils } from './GSCUtils.js?v=104';
+import { GSCChecks } from './GSCChecks.js?v=104';
+import { GSCJPMailConverter } from './GSCJPMailConverter.js?v=104';
+import { GSCTradingData } from './GSCTradingDataUtils.js?v=104';
 
 export class GSCTrading extends TradingProtocol {
     static JAPANESE_LANGUAGE = 1;
@@ -349,7 +349,7 @@ export class GSCTrading extends TradingProtocol {
      * Wait for peer to connect in link trade mode.
      * Server sends "CLIENT" message when both players are in the room.
      */
-    async waitForPeer() {
+    async waitForPeer(timeoutMs = 120000) {
         this.log("Waiting for another player to join the room...");
 
         // Send empty message to trigger server to check for pairing
@@ -360,9 +360,9 @@ export class GSCTrading extends TradingProtocol {
         // ref impl doesn't send "CLIENT", but we know peer is connected when we receive their buffered data
         // Check if we already have peer's data in recvDict (from GSCBufferedNegotiator)
         return new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => {
+            const timeout = Number.isFinite(timeoutMs) ? setTimeout(() => {
                 reject(new Error("Timeout waiting for peer"));
-            }, 120000); // 2 minute timeout
+            }, timeoutMs) : null;
 
             // Check immediately if we already received buffered data from peer
             if (this.ws.recvDict[msgBuf]) {
@@ -397,6 +397,13 @@ export class GSCTrading extends TradingProtocol {
 
             // The peer only sends its buffered data once, so poll with GETs
             const pollInterval = setInterval(() => {
+                if (this.stopTrade) {
+                    clearTimeout(timeout);
+                    clearInterval(pollInterval);
+                    this.ws.ws?.removeEventListener('message', checkMessage);
+                    reject(new Error('Stopped'));
+                    return;
+                }
                 this.ws.sendGetData(msgBuf);
                 if (this.ws.recvDict[msgBuf]) {
                     clearTimeout(timeout);
@@ -1526,7 +1533,7 @@ export class GSCTrading extends TradingProtocol {
                 this.ws.sendGetData(tag);
                 lastGet = Date.now();
             }
-            if (keepAlive) await this.exchangeByte(this.NO_INPUT);
+            if (keepAlive && !this.isDeviceMaster) await this.exchangeByte(this.NO_INPUT);
             await this.sleep(50);
         }
         return null;
@@ -2567,6 +2574,8 @@ export class GSCTrading extends TradingProtocol {
                 this.initialNegotiationDone = true;
                 return this.isBuffered;
             })();
+            // Surfaced when awaited in the loop below
+            negotiationPromise.catch(() => {});
         }
 
 
@@ -3748,6 +3757,14 @@ export class GSCTrading extends TradingProtocol {
             }
         }
 
+        // The Game Boy drives the clock (Player 1): the adapter answers the rest of its
+        // preamble and the whole block by itself
+        if (this.isDeviceMaster) {
+            if (useSyncForSection) throw new Error('A synchronous exchange needs the adapter to drive the clock');
+            const checker = this.getSectionChecker(index, bufferedRead);
+            return this.exchangeSectionAsFollower(index, length, sectionFillers, dataToSend, checker, starter);
+        }
+
         // 3. Preamble Stage 2: Sync with Device (Wait for Data Start)
         // NO_DATA (0x00) is never a legal first byte for the party section,
         // but the patch section legitimately starts with 7 zero header bytes —
@@ -3849,6 +3866,37 @@ export class GSCTrading extends TradingProtocol {
         }
 
 
+    }
+
+    /**
+     * Python buffered_exchange_section_device_master: the checked section goes to the
+     * adapter without the filler positions, and the Game Boy's block comes back with
+     * the filler values put back in.
+     */
+    async exchangeSectionAsFollower(index, length, fillers, source, checker, starter) {
+        const sending = this.checkedSectionData(source || [], length, fillers, checker, index);
+        this.fedSections[index] = new Uint8Array(sending);
+        const linkBytes = [];
+        for (let i = 0; i < length;) {
+            linkBytes.push(sending[i] ?? this.NO_DATA);
+            i++;
+            if (fillers[i]) i += fillers[i][0];
+        }
+        const link = this.usb.passiveLink;
+        const stopped = () => this.stopTrade;
+        await link.sendSection(linkBytes, starter, this.NO_INPUT, stopped);
+        if (this.verbose) this.log(`Section ${index}: sent ${linkBytes.length} bytes to the adapter, waiting for the Game Boy...`);
+        const block = await link.sectionResult(linkBytes.length, stopped,
+            (sent) => this.onProgress?.(index, Math.min(sent, length), length));
+        if (this.stopTrade) throw new Error('Trade stopped');
+        const received = [];
+        for (const byte of block) {
+            received.push(byte);
+            const fill = fillers[received.length];
+            if (fill) for (let j = 0; j < fill[0]; j++) received.push(fill[1]);
+        }
+        while (received.length < length) received.push(this.NO_DATA);
+        return new Uint8Array(received.slice(0, length));
     }
 
     async waitForMessage(type, timeoutMs = 30000) {

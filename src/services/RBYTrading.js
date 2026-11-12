@@ -9,9 +9,9 @@
  * - No eggs, no mail
  */
 
-import { GSCTrading } from './GSCTrading.js?v=103';
-import { RBYUtils } from './RBYUtils.js?v=103';
-import { RBYTradingData, RBYChecks } from './RBYTradingDataUtils.js?v=103';
+import { GSCTrading } from './GSCTrading.js?v=104';
+import { RBYUtils } from './RBYUtils.js?v=104';
+import { RBYTradingData, RBYChecks } from './RBYTradingDataUtils.js?v=104';
 
 export class RBYTrading extends GSCTrading {
     constructor(usb, ws, logger, tradeType = 'pool', isBuffered = false, doSanityChecks = true, options = {}) {
@@ -164,6 +164,8 @@ export class RBYTrading extends GSCTrading {
                 this.initialNegotiationDone = true;
                 return this.isBuffered;
             })();
+            // Surfaced when awaited in the loop below
+            negotiationPromise.catch(() => {});
         }
 
         // Main trading loop

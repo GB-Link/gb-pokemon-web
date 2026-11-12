@@ -2,20 +2,29 @@
  * GSCBattling.js - Gen 2 (Gold/Silver/Crystal) link battles.
  *
  * The Colosseum uses the trade machinery with different state tables; the
- * trade menu is replaced by a per-turn choice exchange, and three transfers
+ * trade menu is replaced by a per-turn choice exchange, and these transfers
  * are added on top of the trading tags:
  * - BFL2: full battle data (counter + rng echo + party + patches), compared
  *   against the section exchange to detect altered data
  * - TST2: peer rendezvous before a synchronous section transfer
  * - RSS2: server RNG reseed acknowledgment
- * The 10-byte RNG section always comes from the server (both players get the
- * identical seed) so the two games' battle RNGs stay in lockstep.
+ * - DTI2: whether this side's Game Boy can play Player 1, and whether it prefers to
+ * - WP12: the server's pick of Player 1 when both can and neither prefers
+ * - P1R2: Player 1's battle seed (counter + 10 bytes)
+ *
+ * When neither Game Boy can play Player 1, both play Player 2 and the 10-byte
+ * RNG section comes from the server (both players get the identical seed). In
+ * a buffered battle where one can, that Game Boy drives the clock and plays
+ * Player 1, as on a real cable: its game keeps its own seed, which Player 2's
+ * game gets through P1R2, and both games agree on the turn order (speed ties
+ * included).
  */
 
-import { GSCTrading } from './GSCTrading.js?v=103';
-import { GSCUtils } from './GSCUtils.js?v=103';
-import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=103';
-import { GSCTradingData } from './GSCTradingDataUtils.js?v=103';
+import { GSCTrading } from './GSCTrading.js?v=104';
+import { TradingProtocol } from './TradingProtocol.js?v=104';
+import { GSCUtils } from './GSCUtils.js?v=104';
+import { GSCPokemonInfo } from './GSCPokemonInfo.js?v=104';
+import { GSCTradingData } from './GSCTradingDataUtils.js?v=104';
 
 export class GSCBattling extends GSCTrading {
     constructor(usb, ws, logger, tradeType = 'battle', isBuffered = false, doSanityChecks = true, options = {}) {
@@ -32,6 +41,11 @@ export class GSCBattling extends GSCTrading {
         this.ENTER_ROOM_STATES = [
             [0x01, 0x61, 0xD2, 0x00, 0xFE],
             [new Set([0x61]), new Set([0xD2]), new Set([0x00]), new Set([0xFE]), new Set([0xFE])]
+        ];
+        // The Game Boy drives the clock: 0x02 makes it Player 1
+        this.ENTER_ROOM_STATES_DEVICE_MASTER = [
+            [0x02, 0x61, 0xD2, 0x00, 0xFE],
+            [new Set([0x61]), new Set([0xD2]), new Set([0x00]), new Set([0x00, 0x85]), new Set([0x00, 0x85])]
         ];
         this.START_TRADING_STATES = [
             [0x85, 0x85, 0x86],
@@ -100,6 +114,13 @@ export class GSCBattling extends GSCTrading {
         this.battleBaseSections = null;
         this.battleTurnTimeS = options.battleTurnTime ?? 30;
 
+        // Player 1 / Player 2 (decided before the game links)
+        this.isP1P2BattleMode = false;
+        this.peerCanBeMaster = null;
+        this.peerPrefersMaster = null;
+        this.hasSentFll = false;
+        this.storedPeerFll = null;
+
         // UI hooks for the inter-turn wait
         this.onTurnWait = null;
         this.onTurnWaitEnd = null;
@@ -110,6 +131,16 @@ export class GSCBattling extends GSCTrading {
     get MSG_BFL() { return "BFL2"; }
     get MSG_RSS() { return "RSS2"; }
     get MSG_TST() { return "TST2"; }
+    get MSG_DTI() { return "DTI2"; }
+    get MSG_WP1() { return "WP12"; }
+    get MSG_P1R() { return "P1R2"; }
+
+    // DTI and WP1 values (Python GSCBattlingClient)
+    static CAN_BE_MASTER = 0x17;
+    static CANNOT_BE_MASTER = 0x46;
+    static PREFERS_MASTER = 0x68;
+    static NO_MASTER_PREFERENCE = 0x12;
+    static WP1_YOU_ARE_P1 = 0x49;
 
     get BASE_BATTLE_PATH() { return '/data/gsc/base_battle.bin'; }
 
@@ -189,6 +220,7 @@ export class GSCBattling extends GSCTrading {
         if (this.getLockSwapRemainingTime() > 0) {
             return this.NO_INPUT;
         }
+        if (this.isDeviceMaster) return this.exchangeAsFollower(byteToSend);
         await this.usb.writeByte(byteToSend);
         try {
             const recv = await this.usb.readByte();
@@ -249,7 +281,12 @@ export class GSCBattling extends GSCTrading {
 
     async enterRoom() {
         this.log("Entering the battle room...");
-        if (!await this.sendPredefinedSection(this.ENTER_ROOM_STATES, 0, false, true)) return false;
+        if (this.isDeviceMaster) {
+            await this.usb.passiveLink.setIdleByte(this.NO_INPUT);
+            if (!await this.sendPredefinedSection(this.ENTER_ROOM_STATES_DEVICE_MASTER, 0, false, true)) return false;
+        } else if (!await this.sendPredefinedSection(this.ENTER_ROOM_STATES, 0, false, true)) {
+            return false;
+        }
         this.log("Entered the battle room.");
         return true;
     }
@@ -285,7 +322,7 @@ export class GSCBattling extends GSCTrading {
                 this.ws.sendGetData(tag);
                 lastGet = Date.now();
             }
-            if (keepAlive) await this.exchangeByte(this.NO_INPUT);
+            if (keepAlive && !this.isDeviceMaster) await this.exchangeByte(this.NO_INPUT);
             await this.sleep(keepAlive ? 20 : 50);
         }
         return null;
@@ -316,6 +353,80 @@ export class GSCBattling extends GSCTrading {
         delete this.ws.recvDict[this.MSG_TST];
     }
 
+    // ==================== PLAYER 1 / PLAYER 2 ====================
+
+    get canBeMaster() {
+        return !!this.usb?.passiveLink;
+    }
+
+    // The GB-Link adapter and the emulator have no preference: the server picks between two that can
+    get prefersMaster() {
+        return false;
+    }
+
+    sendDataTransmitterInfo() {
+        this.ws.sendData(this.MSG_DTI, new Uint8Array([
+            this.canBeMaster ? GSCBattling.CAN_BE_MASTER : GSCBattling.CANNOT_BE_MASTER,
+            this.prefersMaster ? GSCBattling.PREFERS_MASTER : GSCBattling.NO_MASTER_PREFERENCE
+        ]));
+    }
+
+    async getDataTransmitterInfo() {
+        const data = await this.waitForMessage(this.MSG_DTI, 5000);
+        if (!data || data.length < 2) return null;
+        return [data[0] === GSCBattling.CAN_BE_MASTER, data[1] === GSCBattling.PREFERS_MASTER];
+    }
+
+    async getWhoIsP1() {
+        const data = await this.forceReceiveTag(this.MSG_WP1, false);
+        if (!data || data.length < 1) return null;
+        return data[0] === GSCBattling.WP1_YOU_ARE_P1;
+    }
+
+    sendP1RandomData(data) {
+        if (this.ownCounterId === undefined) {
+            this.ownCounterId = Math.floor(Math.random() * 256);
+        }
+        const payload = new Uint8Array(1 + data.length);
+        payload[0] = this.ownCounterId;
+        payload.set(data, 1);
+        this.ws.sendData(this.MSG_P1R, payload);
+        this.ownCounterId = (this.ownCounterId + 1) % 256;
+    }
+
+    async getP1RandomData() {
+        const data = await this.getCounterMessage(this.MSG_P1R);
+        return data ? new Uint8Array(data.slice(1)) : null;
+    }
+
+    resetP1RandomDataTransfer() {
+        delete this.ws.sendDict[this.MSG_P1R];
+        delete this.ws.recvDict[this.MSG_P1R];
+    }
+
+    /**
+     * Python determine_player1_buffered_battle: a Player 1-Player 2 battle when at least
+     * one side can play Player 1 and the other side knows about it (5.1.0+). One that
+     * can, against one that can't, is Player 1; between two that can, the one that
+     * prefers it, else the server's pick.
+     */
+    async determinePlayer1() {
+        if (this.peerCanBeMaster === null || this.peerPrefersMaster === null) return;
+        if (!this.peerCanBeMaster && !this.canBeMaster) return;
+        this.isP1P2BattleMode = true;
+        let master;
+        if (this.peerCanBeMaster !== this.canBeMaster) {
+            master = this.canBeMaster;
+        } else if (this.peerPrefersMaster !== this.prefersMaster) {
+            master = this.prefersMaster;
+        } else {
+            this.log("Asking the server which player is Player 1...");
+            master = await this.getWhoIsP1();
+            if (master === null) throw new Error('The server never said which player is Player 1');
+        }
+        if (master) await this.usb.passiveLink.setMaster(true);
+    }
+
     // ==================== VERSION CHECK / NEGOTIATION TAIL ====================
 
     /**
@@ -329,6 +440,12 @@ export class GSCBattling extends GSCTrading {
             throw new Error('Server never acknowledged the RNG reseed');
         }
         await this.doVersionCheckBattle();
+        this.peerCanBeMaster = null;
+        this.peerPrefersMaster = null;
+        if (TradingProtocol.isVersionAtLeast(this.peerVersion, 5, 1, 0)) {
+            const info = await this.getDataTransmitterInfo();
+            if (info) [this.peerCanBeMaster, this.peerPrefersMaster] = info;
+        }
     }
 
     get recapKind() {
@@ -359,16 +476,17 @@ export class GSCBattling extends GSCTrading {
     // ==================== SECTION EXCHANGE ====================
 
     /**
-     * Exchange the three battle sections. The RNG section is always fed
-     * from the server seed rather than synced with the peer.
+     * Exchange the three battle sections. The RNG section is never synced with
+     * the peer: it is fed from the server seed, or from Player 1's seed in a
+     * Player 1-Player 2 battle (Player 1's own game keeps its seed).
      */
-    async battleStartingSequence(buffered, sendData = [null, null, null]) {
+    async battleStartingSequence(buffered, sendData = [null, null, null], isValid = true) {
         this.checks.resetSpeciesItemList?.();
 
         // Keep the console clock alive until the background handshake
         // (reseed + version check) is done
         while (!this.isVersionCheckDone && !this.stopTrade) {
-            await this.exchangeByte(this.NO_INPUT);
+            if (!this.isDeviceMaster) await this.exchangeByte(this.NO_INPUT);
             await this.sleep(20);
         }
         if (this.stopTrade) throw new Error('Battle stopped');
@@ -382,12 +500,25 @@ export class GSCBattling extends GSCTrading {
             }
         }
 
-        this.lastRandom = await this.getRandomBattle();
-        if (!this.lastRandom) {
-            throw new Error('No RNG data received from the server');
+        if (isValid && this.isP1P2BattleMode && !this.isDeviceMaster) {
+            this.log("Waiting for Player 1 to send the battle seed...");
+            this.lastRandom = await this.getP1RandomData();
+            if (!this.lastRandom) {
+                throw new Error("Player 1's battle seed never arrived");
+            }
+        } else {
+            this.lastRandom = await this.getRandomBattle();
+            if (!this.lastRandom) {
+                throw new Error('No RNG data received from the server');
+            }
         }
 
-        await this.readSection(0, this.lastRandom, true);
+        const randomData = await this.readSection(0, this.lastRandom, true);
+        // Player 1's game keeps its own seed: send it to Player 2 at once
+        if (isValid && this.isP1P2BattleMode && this.isDeviceMaster) {
+            this.lastRandom = new Uint8Array(randomData);
+            this.sendP1RandomData(this.lastRandom);
+        }
         const partyData = await this.readSection(1, sendData[1], buffered);
         const patchData = await this.readSection(2, sendData[2], buffered);
         if (this.stopTrade) throw new Error('Battle stopped');
@@ -441,9 +572,13 @@ export class GSCBattling extends GSCTrading {
         let sections;
         let valid = true;
         if (this.otherPokemon === null) {
-            this.ws.sendGetData(this.MSG_FLL);
-            await this.sleep(500);
-            let peerFll = this.ws.recvDict[this.MSG_FLL];
+            let peerFll = this.storedPeerFll;
+            this.storedPeerFll = null;
+            if (!peerFll) {
+                this.ws.sendGetData(this.MSG_FLL);
+                await this.sleep(500);
+                peerFll = this.ws.recvDict[this.MSG_FLL];
+            }
             if (!peerFll && this.hasGhosted) {
                 // Our data is already out, so the peer's is on its way -
                 // wait for it (keeping the console clocked) instead of
@@ -453,6 +588,13 @@ export class GSCBattling extends GSCTrading {
                 peerFll = await this.forceReceiveTag(this.MSG_FLL, true, 120000);
             } else if (peerFll) {
                 delete this.ws.recvDict[this.MSG_FLL];
+            }
+            // Player 2 sends its data before it uses Player 1's: Player 1 only starts the
+            // battle that sends its seed once it has Player 2's data
+            if (peerFll && this.isP1P2BattleMode && !this.isDeviceMaster && !this.hasSentFll) {
+                this.log("Found Player 1's data, but ours hasn't gone out yet. Battling the ghost party first so Player 1 gets it...");
+                this.storedPeerFll = peerFll;
+                peerFll = null;
             }
             if (peerFll && peerFll.length > 0) {
                 sections = this.divideData(peerFll, this.SPECIAL_SECTIONS_LEN);
@@ -476,7 +618,7 @@ export class GSCBattling extends GSCTrading {
             sections = this.otherPokemon.createTradingData();
         }
 
-        const [data, dataOther] = await this.battleStartingSequence(true, sections);
+        const [data, dataOther] = await this.battleStartingSequence(true, sections, valid);
         this.ownPokemon = this.createPartyReader(data[1]);
         this.otherPokemon = this.createPartyReader(dataOther[1]);
         if (!valid && this.healAfterNotValidBuffered) {
@@ -502,6 +644,7 @@ export class GSCBattling extends GSCTrading {
         }
         this.log(`Sending ${this.MSG_FLL} battle data: ${payload.length} bytes`);
         this.ws.sendData(this.MSG_FLL, payload);
+        this.hasSentFll = true;
     }
 
     // ==================== BFL (post-exchange verification) ====================
@@ -861,7 +1004,12 @@ export class GSCBattling extends GSCTrading {
     async hasBattleEnded(sentChoice, receivedChoice) {
         if (!this.couldBattleHaveEnded(sentChoice, receivedChoice)) return false;
         const endStates = this.getBattleEndStartTradingStates();
-        const next = await this.timedWaitForSetOfValues(this.NO_INPUT, endStates);
+        // Player 1's game clocks at its own pace: give it longer
+        const timeoutMs = this.isDeviceMaster ? 2500 : 1000;
+        const start = Date.now();
+        let next = await this.timedWaitForSetOfValues(this.NO_INPUT, endStates, { timeoutMs });
+        // A wait that ran on until the game clocked for the next turn's input is no new battle
+        if (this.isDeviceMaster && Date.now() - start > timeoutMs + 500) next = this.NO_INPUT;
         return endStates.has(next);
     }
 
@@ -928,14 +1076,15 @@ export class GSCBattling extends GSCTrading {
         while (!battleCompleted && !this.stopTrade) {
             // Re-arm the inter-turn lock unless part of the window already
             // elapsed elsewhere (the BFL exchange runs under it)
+            // Player 1's game only clocks when it is ready for the turn: no wait
             let timeToWait = this.getLockSwapRemainingTime();
             if (this.isLockSwapStopped()) {
                 timeToWait = this.battleTurnTimeS;
-                if (this.canDropCommands) {
+                if (this.canDropCommands && !this.isDeviceMaster) {
                     this.startLockSwap(timeToWait);
                 }
             }
-            if (!this.canDropCommands) {
+            if (!this.canDropCommands || this.isDeviceMaster) {
                 timeToWait = 0;
             }
             await this.waitBeforeTurn(timeToWait);
@@ -993,7 +1142,7 @@ export class GSCBattling extends GSCTrading {
                 // Hand the opponent's action to the game
                 next = await this.exchangeByte(receivedChoice);
                 next = await this.waitForNoData(next, receivedChoice, this.RESENDS_LIMIT_TRADE);
-                if (next === this.NO_DATA) {
+                if (next === this.NO_DATA && !this.isDeviceMaster) {
                     next = await this.timedWaitForNoInput(next);
                 }
 
@@ -1016,7 +1165,7 @@ export class GSCBattling extends GSCTrading {
                     // One-sided flee: the last exchange decides win/loss/draw
                     next = await this.exchangeByte(receivedChoice);
                     next = await this.waitForNoData(next, receivedChoice, this.RESENDS_LIMIT_TRADE);
-                    if (next === this.NO_DATA) {
+                    if (next === this.NO_DATA && !this.isDeviceMaster) {
                         next = await this.waitForNoInput(next);
                     }
                     battleCompleted = true;
@@ -1041,6 +1190,8 @@ export class GSCBattling extends GSCTrading {
         delete this.ws.recvDict[this.MSG_FLL];
         this.bufferedOtherData = null;
         this.hasGhosted = false;
+        this.hasSentFll = false;
+        this.storedPeerFll = null;
     }
 
     // ==================== SESSION ENTRY ====================
@@ -1051,7 +1202,8 @@ export class GSCBattling extends GSCTrading {
     }
 
     /**
-     * Enter the room, then battle until the player leaves it.
+     * Settle the mode and Player 1 with the other player, enter the room, then battle
+     * until the player leaves it.
      */
     async startBattle() {
         this.log(`Starting ${this.GEN_NAME} Battle Protocol (${this.isBuffered ? 'buffered' : 'sync'}, sanity checks: ${this.doSanityChecks})...`);
@@ -1064,10 +1216,26 @@ export class GSCBattling extends GSCTrading {
         this.resetTrade();
         this.isVersionCheckDone = false;
         this.hasGhosted = false;
+        this.hasSentFll = false;
+        this.storedPeerFll = null;
+        this.isP1P2BattleMode = false;
 
-        // Version, language and client type go out immediately; the check
-        // itself runs after the reseed ack
+        // Every session starts with the adapter driving the clock
+        await this.usb.passiveLink?.setMaster(false);
+        try {
+            await this.battleSession();
+        } finally {
+            this.stopLockSwap();
+            if (this.isDeviceMaster) await this.usb.passiveLink.setMaster(false).catch(() => {});
+            this.log("Battle session ended.");
+        }
+    }
+
+    async battleSession() {
+        // Version, language, client type and whether we can play Player 1 go out
+        // immediately; the check itself runs after the reseed ack
         this.sendSessionIdentity();
+        this.sendDataTransmitterInfo();
         this.logRecap();
 
         // Pre-populate + early-send the buffered preference so the peer's
@@ -1081,17 +1249,29 @@ export class GSCBattling extends GSCTrading {
         this.ws.sendData(this.MSG_BUF, bufPacket);
         this.ownCounterId = (this.ownCounterId + 1) % 256;
 
-        let negotiationPromise = null;
-        if (!this.initialNegotiationDone) {
-            negotiationPromise = (async () => {
-                await this.waitForPeer();
+        // Which game plays Player 1 is decided when it links, so the mode and Player 1
+        // are settled with the other player first
+        this.onStatus?.('Waiting for the other player…');
+        try {
+            if (!this.initialNegotiationDone) {
+                await this.waitForPeer(Infinity);
                 await this.completeBufferedNegotiation();
                 await this.postBufferedNegotiationInit();
                 this.initialNegotiationDone = true;
-            })();
-            // Surfaced when awaited in the loop below
-            negotiationPromise.catch(() => {});
+            }
+            this.log(`Negotiation complete. Mode: ${this.isBuffered ? 'Buffered' : 'Sync'}`);
+            if (this.isBuffered) await this.determinePlayer1();
+        } catch (error) {
+            if (!this.stopTrade) this.log(`[ERROR] Battle error: ${error.message}`);
+            return;
         }
+        if (this.stopTrade) return;
+
+        this.log(`Starting the battle as Player ${this.isDeviceMaster ? 1 : 2}.`);
+        if (!this.isP1P2BattleMode) {
+            this.log("[WARN] Both games play Player 2 in this battle, so the turn order can come out differently in the two games (a tie in Speed, for example).");
+        }
+        this.onStatus?.('Enter the Colosseum and start a battle on your Game Boy');
 
         await this.enterRoom();
 
@@ -1103,27 +1283,6 @@ export class GSCBattling extends GSCTrading {
                 }
                 if (this.stopTrade) break;
 
-                if (negotiationPromise) {
-                    this.log("Waiting for mode negotiation and the server handshake...");
-                    const pending = negotiationPromise;
-                    negotiationPromise = null;
-                    // keep the console clock running
-                    // while the negotiation thread finishes
-                    let negotiationSettled = false;
-                    let negotiationError = null;
-                    pending.then(
-                        () => { negotiationSettled = true; },
-                        (e) => { negotiationSettled = true; negotiationError = e; }
-                    );
-                    while (!negotiationSettled && !this.stopTrade) {
-                        await this.exchangeByte(this.NO_INPUT);
-                        await this.sleep(20);
-                    }
-                    if (negotiationError) throw negotiationError;
-                    if (this.stopTrade) break;
-                    this.log(`Negotiation complete. Mode: ${this.isBuffered ? 'Buffered' : 'Sync'}`);
-                }
-
                 const valid = this.isBuffered
                     ? await this.bufferedBattle()
                     : await this.synchronousBattle();
@@ -1132,10 +1291,11 @@ export class GSCBattling extends GSCTrading {
                 if (valid) {
                     // Gen 2 games start animating right after the exchange -
                     // suspend polling for the whole turn window
-                    if (this.canDropCommands) {
+                    if (this.canDropCommands && !this.isDeviceMaster) {
                         this.startLockSwap(this.battleTurnTimeS);
                     }
                     this.sendBigBattleTradingData();
+                    this.log("Waiting for the other player to also reach the start of the battle...");
                     const otherFull = await this.getBigBattleTradingData();
                     if (!otherFull) break;
                     if (!this.verifyBattleData(otherFull)) {
@@ -1147,13 +1307,15 @@ export class GSCBattling extends GSCTrading {
                         this.onStatus?.("Other player's data changed — battle aborted", 'error');
                         break;
                     }
+                    // Both games are in the battle: the next one exchanges its data afresh
+                    this.resetBigTradingData();
+                    if (this.isP1P2BattleMode) this.resetP1RandomDataTransfer();
                 }
 
                 await this.doBattle(!valid);
                 this.stopLockSwap();
 
                 if (valid && !this.stopTrade) {
-                    this.resetBigTradingData();
                     this.resetTrade();
                     // Fresh server seed for the next battle
                     if (!(await this.waitForReseed(true))) break;
@@ -1164,8 +1326,5 @@ export class GSCBattling extends GSCTrading {
                 break;
             }
         }
-
-        this.stopLockSwap();
-        this.log("Battle session ended.");
     }
 }

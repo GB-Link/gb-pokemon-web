@@ -3,9 +3,9 @@
  * Extends GSCUtils with RBY-specific constants and methods.
  */
 
-import { GSCUtils } from './GSCUtils.js?v=103';
-import { RBYPokemonInfo } from './RBYTradingDataUtils.js?v=103';
-import { RBYChecks } from './RBYChecks.js?v=103';
+import { GSCUtils } from './GSCUtils.js?v=104';
+import { RBYPokemonInfo } from './RBYTradingDataUtils.js?v=104';
+import { RBYChecks } from './RBYChecks.js?v=104';
 
 export class RBYUtils extends GSCUtils {
     // ==================== RBY-SPECIFIC STRUCTURE CONSTANTS ====================

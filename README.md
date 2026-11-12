@@ -52,14 +52,16 @@ Ported to Web by Starlark for easier access and wider device support.
 
 ### Battles (Gen 1 & Gen 2)
 - Select your generation, pick **Battle**, and share a room code with the other player (they can use this web client or the Python CLI).
+- Press **Start** first. Once the other player is there, the status says to enter the Colosseum.
 - Go to the Cable Club and enter the **Colosseum** (not the Trade Center). If your Gen 2 game goes to the wrong room, it says the rooms don't match and lets you out, and the status tells you which receptionist to talk to.
+- **Player 1 and Player 2.** On a real cable one Game Boy is Player 1 and the other Player 2, and the two games use that to agree on who moves first when both Pokémon have the same Speed. In a buffered battle, a GB-Link adapter with firmware 3.0 or newer, or the emulator, can play Player 1. When only one side can, it does; when both can, the server picks. The log says which one your Game Boy plays.
+- When neither side can play Player 1 (older adapter firmware, a Python CLI on older hardware, or a synchronous battle), both games play Player 2, and two Pokémon with exactly the same Speed desync the battle: each game thinks its own Pokémon moved first.
+- Battles are buffered by default (**Buffered Battles** in Settings; trades have their own **Buffered Trades** setting). A buffered battle starts with a ghost battle against a stand-in "FLEE" party: pick any action, then flee. The real battle follows.
 - Notes ported from the Python client:
-    - **Gen 2** waits between turns (default 30 s, changeable in Settings, skippable with the "Start turn now" button) because the inputs of the two games must stay in lockstep; very short waits (a second or two) can leave a game frozen at "Waiting...!". Beat Up is known to be risky.
+    - **Gen 2**: the Game Boy that plays Player 2 waits between turns (default 30 s, changeable in Settings, skippable with the "Start turn now" button), because checking for its input while a battle animation plays can lose the link; very short waits (a second or two) can leave a game frozen at "Waiting...!". The Game Boy that plays Player 1 doesn't wait: its game asks for input when it is ready. Beat Up is known to be risky.
     - **Gen 1** has no wait, but Counter, Mirror Move, Psywave, Fly, Dig and Mimic can desync the battle, and turn order can look odd.
     - Sanity checks validate the opponent's data and moves; if the data had to be fixed, the battle is stopped ("SOMETHING CHANGED"): both games stay at "Waiting...!" after the first move and need a reset.
-    - In both generations, two Pokémon with exactly the same Speed desync the battle: each game thinks its own Pokémon moved first.
     - Gen 2's Whirlwind/Roar/Metronome/Mimic temporarily make the opponent's moves unverifiable.
-    - **Buffered mode** starts with a ghost battle against a stand-in "FLEE" party: pick any action, then flee - the real battle follows.
     - Battles are not available for Gen 3 or Time Capsule.
 
 ### Languages and names

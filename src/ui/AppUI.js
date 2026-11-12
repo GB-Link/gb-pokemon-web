@@ -1,17 +1,17 @@
 
-import { UsbConnection, CMD, MODE } from '../services/UsbConnection.js?v=103';
-import { SerialConnection } from '../services/SerialConnection.js?v=103';
-import { EmulatorConnection } from '../services/EmulatorConnection.js?v=103';
-import { WebSocketClient } from '../services/WebSocketClient.js?v=103';
-import { RBYTrading } from '../services/RBYTrading.js?v=103';
-import { GSCTrading } from '../services/GSCTrading.js?v=103';
-import { GSCTradingKOR } from '../services/GSCTradingKOR.js?v=103';
-import { TradingProtocol } from '../services/TradingProtocol.js?v=103';
-import { RBYBattling } from '../services/RBYBattling.js?v=103';
-import { GSCBattling } from '../services/GSCBattling.js?v=103';
-import { SettingsManager } from '../services/SettingsManager.js?v=103';
-import { multiboot } from '../services/Multiboot.js?v=103';
-import { RSESPTrading } from '../services/RSESPTrading.js?v=103';
+import { UsbConnection, CMD, MODE } from '../services/UsbConnection.js?v=104';
+import { SerialConnection } from '../services/SerialConnection.js?v=104';
+import { EmulatorConnection } from '../services/EmulatorConnection.js?v=104';
+import { WebSocketClient } from '../services/WebSocketClient.js?v=104';
+import { RBYTrading } from '../services/RBYTrading.js?v=104';
+import { GSCTrading } from '../services/GSCTrading.js?v=104';
+import { GSCTradingKOR } from '../services/GSCTradingKOR.js?v=104';
+import { TradingProtocol } from '../services/TradingProtocol.js?v=104';
+import { RBYBattling } from '../services/RBYBattling.js?v=104';
+import { GSCBattling } from '../services/GSCBattling.js?v=104';
+import { SettingsManager } from '../services/SettingsManager.js?v=104';
+import { multiboot } from '../services/Multiboot.js?v=104';
+import { RSESPTrading } from '../services/RSESPTrading.js?v=104';
 
 export class AppUI {
     constructor() {
@@ -65,6 +65,7 @@ export class AppUI {
             settingVerbose: document.getElementById('setting-verbose'),
             settingDarkMode: document.getElementById('setting-dark-mode'),
             settingBuffered: document.getElementById('setting-buffered'),
+            settingBufferedBattle: document.getElementById('setting-buffered-battle'),
             settingCrashSync: document.getElementById('setting-crash-sync'),
             settingBattleTurnTime: document.getElementById('setting-battle-turn-time'),
             battleWaitCard: document.getElementById('battle-wait-card'),
@@ -174,6 +175,7 @@ export class AppUI {
         this.elements.settingVerbose.checked = s.verbose;
         this.elements.settingDarkMode.checked = s.darkMode;
         this.elements.settingBuffered.checked = s.isBuffered;
+        this.elements.settingBufferedBattle.checked = s.isBufferedBattle;
         this.elements.settingCrashSync.checked = s.crashOnSyncDrop;
         this.elements.settingBattleTurnTime.value = s.battleTurnTime;
         this.elements.settingMaxLevel.value = s.maxLevel;
@@ -193,6 +195,7 @@ export class AppUI {
         this.settings.set('verbose', this.elements.settingVerbose.checked);
         this.settings.set('darkMode', this.elements.settingDarkMode.checked);
         this.settings.set('isBuffered', this.elements.settingBuffered.checked);
+        this.settings.set('isBufferedBattle', this.elements.settingBufferedBattle.checked);
         this.settings.set('crashOnSyncDrop', this.elements.settingCrashSync.checked);
         const battleTurnTime = Math.max(0, parseInt(this.elements.settingBattleTurnTime.value) || 0);
         this.settings.set('battleTurnTime', battleTurnTime);
@@ -227,6 +230,7 @@ export class AppUI {
             'verbose': this.elements.settingVerbose.checked,
             'darkMode': this.elements.settingDarkMode.checked,
             'isBuffered': this.elements.settingBuffered.checked,
+            'isBufferedBattle': this.elements.settingBufferedBattle.checked,
             'crashOnSyncDrop': this.elements.settingCrashSync.checked,
             'battleTurnTime': Math.max(0, parseInt(this.elements.settingBattleTurnTime.value) || 0),
             'maxLevel': parseInt(this.elements.settingMaxLevel.value) || 100,
@@ -576,7 +580,7 @@ export class AppUI {
         btn.disabled = true;
         try {
             if (!this.emulatorPanel) {
-                const { EmulatorPanel } = await import('./EmulatorPanel.js?v=103');
+                const { EmulatorPanel } = await import('./EmulatorPanel.js?v=104');
                 const $ = (id) => document.getElementById(id);
                 this.emulatorPanel = new EmulatorPanel({
                     panel: $('emulator-panel'), screen: $('emu-screen'), canvas: $('emu-canvas'), loader: $('emu-loader'),
@@ -695,7 +699,7 @@ export class AppUI {
 
         const gen = this.selectedGen;
         const tradeType = this.selectedTradeType;
-        const isBuffered = this.settings.get('isBuffered');
+        const isBuffered = this.settings.get(tradeType === 'battle' ? 'isBufferedBattle' : 'isBuffered');
         const doSanityChecks = this.settings.get('doSanityChecks');
 
         // Voltage: Gen 1 & 2 → 5V (original GB/GBC hardware), Gen 3 → 3.3V (GBA)
@@ -800,7 +804,7 @@ export class AppUI {
         if (tradeType === 'battle') {
             protocol.onTurnWait = (seconds) => this.showBattleWait(seconds);
             protocol.onTurnWaitEnd = () => this.hideBattleWait();
-            this.setStatus('Enter the Colosseum and start a battle on your Game Boy', 'active');
+            this.setStatus('Waiting for the other player…', 'active');
         } else {
             this.setStatus('Initiate the trade on your Game Boy', 'active');
         }

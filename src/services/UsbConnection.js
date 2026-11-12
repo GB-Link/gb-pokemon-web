@@ -3,6 +3,7 @@
  * Supports both old (reconfigurable, TinyUSB, VID 0xCAFE) and
  * new (GBLink unified, Zephyr, VID 0x2FE3) firmware.
  */
+import { GbLinkPassive } from './GbLinkPassive.js?v=104';
 
 // Check firmware version from USB device descriptor (bcdDevice)
 function fwVersionAtLeast(device, minMajor, minMinor, minPatch) {
@@ -69,6 +70,8 @@ export class UsbConnection {
         this.cmdEndpointOut = 0;    // Command OUT        (new firmware only)
         this.isConnected = false;
         this.isNewFirmware = false;
+        // Firmware 3.0 and newer: the Game Boy can drive the clock and play Player 1
+        this.passiveLink = null;
         this._pendingDataIn = null; // in-flight transferIn on the data endpoint
     }
 
@@ -145,8 +148,9 @@ export class UsbConnection {
             await this.device.selectConfiguration(1);
 
             // Detect firmware by VID
-            this.isNewFirmware = this.device.vendorId === 0x2FE3
-                || (this.device.vendorId === 0x1209 && this.device.productId === 0xB011);
+            const isFirmware3 = this.device.vendorId === 0x1209 && this.device.productId === 0xB011;
+            this.isNewFirmware = this.device.vendorId === 0x2FE3 || isFirmware3;
+            this.passiveLink = isFirmware3 ? new GbLinkPassive(this) : null;
 
             // Find the vendor class interface and map endpoints
             const interfaces = this.device.configuration.interfaces;
@@ -230,6 +234,7 @@ export class UsbConnection {
             this.device = null;
             this.isConnected = false;
             this.isNewFirmware = false;
+            this.passiveLink = null;
             this._pendingDataIn = null;
         }
     }

@@ -8,10 +8,10 @@
  * ghost party gets healed, and the battle-end probe waits for 0xFD.
  */
 
-import { GSCBattling } from './GSCBattling.js?v=103';
-import { GSCTrading } from './GSCTrading.js?v=103';
-import { RBYUtils } from './RBYUtils.js?v=103';
-import { RBYTradingData, RBYChecks } from './RBYTradingDataUtils.js?v=103';
+import { GSCBattling } from './GSCBattling.js?v=104';
+import { GSCTrading } from './GSCTrading.js?v=104';
+import { RBYUtils } from './RBYUtils.js?v=104';
+import { RBYTradingData, RBYChecks } from './RBYTradingDataUtils.js?v=104';
 
 export class RBYBattling extends GSCBattling {
     constructor(usb, ws, logger, tradeType = 'battle', isBuffered = false, doSanityChecks = true, options = {}) {
@@ -27,6 +27,10 @@ export class RBYBattling extends GSCBattling {
                 new Set([0xD0, 0xD1, 0xD2, 0xD3, 0xD4]),
                 new Set(Array.from({ length: 0x10 }, (_, i) => 0x60 + i))
             ]
+        ];
+        this.ENTER_ROOM_STATES_DEVICE_MASTER = [
+            [0x02, 0x60, 0xD1, 0xD5],
+            this.ENTER_ROOM_STATES[1]
         ];
         this.ROOM_SYNC_STATE = null;
         this.START_TRADING_STATES = [
@@ -87,6 +91,9 @@ export class RBYBattling extends GSCBattling {
     get MSG_BFL() { return "BFL1"; }
     get MSG_RSS() { return "RSS1"; }
     get MSG_TST() { return "TST1"; }
+    get MSG_DTI() { return "DTI1"; }
+    get MSG_WP1() { return "WP11"; }
+    get MSG_P1R() { return "P1R1"; }
 
     get BASE_BATTLE_PATH() { return '/data/rby/base_battle.bin'; }
 

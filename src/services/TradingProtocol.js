@@ -29,9 +29,9 @@ export class TradingProtocol {
     static CLIENT_TYPE_JS_USB = 4;
     static CLIENT_TYPE_JS_EMU_WEB = 6;
 
-    // TradingVersion 5.0.1 (little-endian 16-bit major/minor/build)
+    // TradingVersion 5.1.0 (little-endian 16-bit major/minor/build)
     versionData() {
-        return new Uint8Array([5, 0, 0, 0, 1, 0]);
+        return new Uint8Array([5, 0, 1, 0, 0, 0]);
     }
 
     static isVersionAtLeast(data, major, minor, build) {
@@ -196,7 +196,19 @@ export class TradingProtocol {
         throw error;
     }
 
+    /** The Game Boy drives the clock (it plays Player 1) and the adapter answers it. */
+    get isDeviceMaster() {
+        return !!this.usb?.passiveLink?.master;
+    }
+
+    // The byte goes out with the Game Boy's next transfer, whenever the game clocks it
+    async exchangeAsFollower(byteToSend) {
+        const answer = await this.usb.passiveLink.exchange(byteToSend, () => this.stopTrade);
+        return answer ?? this.NO_DATA;
+    }
+
     async exchangeByte(byteToSend) {
+        if (this.isDeviceMaster) return this.exchangeAsFollower(byteToSend);
         await this.usb.writeByte(byteToSend);
         let lastError = null;
         for (let attempt = 0; attempt < 3; attempt++) {

@@ -22,6 +22,7 @@ export class SettingsManager {
 
         // 2-Player Options
         isBuffered: false,
+        isBufferedBattle: true,
         crashOnSyncDrop: true,
         battleTurnTime: 30,
 

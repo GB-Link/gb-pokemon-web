@@ -107,6 +107,12 @@ static void _linkDeinit(struct GBSIODriver* driver) {
 	l->transferring = false;
 }
 
+/* When the game drives the clock, the page can answer: Module.onLinkClock gets
+ * the byte the game sends and returns the byte it receives, or -1 for none. */
+EM_JS(int, _pageLinkClock, (int sent), {
+	return Module.onLinkClock ? Module.onLinkClock(sent) : -1;
+});
+
 static void _linkWriteSB(struct GBSIODriver* driver, uint8_t value) {
 	(void) driver; (void) value;
 }
@@ -121,8 +127,9 @@ static uint8_t _linkWriteSC(struct GBSIODriver* driver, uint8_t value) {
 			l->result = LINK_NOT_READY;
 		}
 	} else if (GBRegisterSCIsShiftClock(value)) {
-		// The game drives the clock: nobody answers, the game reads 0x00
-		l->d.p->pendingSB = 0x00;
+		// The game drives the clock: the page's answer, else the game reads 0x00
+		int answer = _pageLinkClock(gb->memory.io[GB_REG_SB]);
+		l->d.p->pendingSB = answer >= 0 ? (uint8_t) answer : 0x00;
 	} else if (l->pending >= 0 && !l->transferring) {
 		_linkStart(l);
 	}

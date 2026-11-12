@@ -2,7 +2,8 @@
  * Game Boy emulator (mGBA's GB core compiled to WebAssembly, emulator/mgba-gb.*)
  * running in the page: frames, screen, sound, keys, battery save and the link
  * port. The link port is driven as clock master, the same way the GB-Link
- * adapter drives a real cartridge.
+ * adapter drives a real cartridge, or answers the game when it drives the
+ * clock itself.
  *
  * Frames are paced by the sound output when sound is running (the audio
  * thread keeps going in background tabs), otherwise by requestAnimationFrame,
@@ -19,10 +20,10 @@ const AUDIO_TARGET_SECONDS = 0.07;
 
 export class GameBoyEmulator {
     static async create(moduleOptions = {}) {
-        const { default: createGbEmu } = await import('../../emulator/mgba-gb.js?v=103');
+        const { default: createGbEmu } = await import('../../emulator/mgba-gb.js?v=104');
         const options = { ...moduleOptions };
         if (!options.locateFile && typeof window !== 'undefined') {
-            options.locateFile = (path) => new URL(`../../emulator/${path}?v=103`, import.meta.url).href;
+            options.locateFile = (path) => new URL(`../../emulator/${path}?v=104`, import.meta.url).href;
         }
         return new GameBoyEmulator(await createGbEmu(options));
     }
@@ -143,6 +144,15 @@ export class GameBoyEmulator {
             this._linkQueue.push({ byte: byte & 0xFF, resolve });
             this._pumpLink();
         });
+    }
+
+    /**
+     * When the game drives the clock itself: handler(byte the game sends) returns the
+     * byte it receives, or -1 (it then reads 0x00). Runs inside the frame, so it must
+     * not call back into the emulator.
+     */
+    setLinkClockHandler(handler) {
+        this.m.onLinkClock = handler || null;
     }
 
     _pumpLink() {
@@ -312,7 +322,7 @@ export class GameBoyEmulator {
         this._audio = { ctx, gain, node: null, ready: false, pushed: 0, taken: 0, scratch: new Float32Array(8192) };
         this.m._emu_set_sample_rate(ctx.sampleRate);
         try {
-            await ctx.audioWorklet.addModule(new URL('./audio-worklet.js?v=103', import.meta.url));
+            await ctx.audioWorklet.addModule(new URL('./audio-worklet.js?v=104', import.meta.url));
             const node = new AudioWorkletNode(ctx, 'gb-audio', { outputChannelCount: [2] });
             node.port.onmessage = (e) => this._onAudioTaken(e.data);
             node.connect(gain);

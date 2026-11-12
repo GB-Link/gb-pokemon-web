@@ -87,16 +87,6 @@
             </div>
         </div>
 
-        <!-- Battle Turn Wait -->
-        <div id="battle-wait-card" class="card negotiation-card" hidden>
-            <h2>Battle Turn Wait</h2>
-            <p id="battle-wait-text">Waiting before checking for the next input…</p>
-            <p>Only press "Start turn now" once your game shows "Waiting...!" — skipping while an animation is still playing can desync the battle.</p>
-            <div class="negotiation-buttons">
-                <button id="btn-battle-skip-wait" class="btn-yes">Start turn now</button>
-            </div>
-        </div>
-
         <div class="card" id="status-card">
             <div class="card-title-row">
                 <h2 id="status-title">Status</h2>
@@ -169,6 +159,16 @@
                 <p class="emu-keys">Keys: arrows, X or A = A, Z or S = B, Enter = Start, Shift = Select. Gamepads work too.</p>
                 <input type="file" id="emu-file" accept=".gb,.gbc,.sgb,.sav,.srm" multiple hidden>
                 <input type="file" id="emu-save-file" accept=".sav,.srm" hidden>
+            </div>
+        </div>
+
+        <!-- Battle Turn Wait (below the game screen, so the screen stays put) -->
+        <div id="battle-wait-card" class="card negotiation-card" hidden>
+            <h2>Battle Turn Wait</h2>
+            <p id="battle-wait-text">Waiting before checking for the next input…</p>
+            <p>Only press "Start turn now" once your game shows "Waiting...!" — skipping while an animation is still playing can desync the battle.</p>
+            <div class="negotiation-buttons">
+                <button id="btn-battle-skip-wait" class="btn-yes">Start turn now</button>
             </div>
         </div>
 
@@ -279,12 +279,20 @@
             <div class="settings-section">
                 <h3>2-Player Options</h3>
                 <div class="setting-item">
-                    <label for="setting-buffered">Buffered Connection:</label>
+                    <label for="setting-buffered">Buffered Trades:</label>
                     <label class="toggle-switch">
                         <input type="checkbox" id="setting-buffered">
                         <span class="toggle-slider"></span>
                     </label>
                     <span class="default-indicator" data-setting="isBuffered"></span>
+                </div>
+                <div class="setting-item">
+                    <label for="setting-buffered-battle">Buffered Battles:</label>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="setting-buffered-battle" checked>
+                        <span class="toggle-slider"></span>
+                    </label>
+                    <span class="default-indicator" data-setting="isBufferedBattle"></span>
                 </div>
                 <div class="setting-item">
                     <label for="setting-crash-sync">Crash on Sync Drop:</label>
@@ -330,7 +338,7 @@
             </div>
         </div>
     </div>
-    <script type="module" src="src/main.js?v=103"></script>
+    <script type="module" src="src/main.js?v=104"></script>
     <script src="src/launcher-return.js"></script>
 </body>
 
